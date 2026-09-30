@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://json.schemastore.org/traefik-v3-file-provider.json
+http:
+  routers:
+    placeholder:
+      rule: PathPrefix(`/`)
+      middlewares:
+        - cache
+      service: placeholder
+
+  services:
+    placeholder:
+      loadBalancer:
+        servers:
+          - url: "http://placeholder:3000"

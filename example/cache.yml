@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://json.schemastore.org/traefik-v3-file-provider.json
+http:
+  middlewares:
+    cache:
+      plugin:
+        traedis:
+          # All keys are optional
+          redis:
+            dsn: "redis://cache:6379/0"                  # Redis connection string, including optional credentials and database number
+            timeout: 50ms                                # Maximum time allowed for a Redis operation before bypassing the cache
+          cache:
+            allowed_http_methods:                        # HTTP methods allowed to get cached
+              - GET
+              - HEAD
+            allowed_status_codes:                        # HTTP status codes allowed to get cached
+              - 200
+              - 301
+              - 404
+            default_cache_control: "public, max-age=300" # Cache-Control value used when the backend does not provide one
+            key:
+              include_body: false                        # Do not include the request body in the cache key by default
+              include_host: true                         # Include the request host to prevent collisions between virtual hosts
+              include_method: true                       # Include the HTTP method in the cache key
+              include_query: true                        # Include query parameters in the cache key
+              sort_query: true                           # Sort query parameters so equivalent URLs generate the same cache key
+              include_scheme: true                       # Include the request scheme (HTTP or HTTPS) in the cache key
+              hash: true                                 # Hash the generated cache key before storing it in Redis
+              headers: [ ]                               # Additional request headers that should always participate in the cache key
+              expose: false                              # Do not expose the internal cache key in response headers by default
+              template: ""                               # Optional custom cache-key template; empty uses the standard key generator
+            max_cacheable_body_bytes: 5242880            # Maximum response body size to cache, in bytes (5 MiB)
+            stale: 1h                                    # Maximum time an expired cached response may remain available as stale content
+            ttl: 5m                                      # Default lifetime of a cached response when no more specific TTL is available
