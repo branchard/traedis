@@ -9,7 +9,7 @@ help: ## Show this help
 		/^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 start: ## Start containers with Docker Compose
-	docker compose up -d --build --force-recreate
+	docker compose up -d --force-recreate --watch
 
 stop: ## Stop and delete all containers
 	docker compose down
