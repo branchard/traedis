@@ -17,7 +17,7 @@ services:
     volumes:
       - http-cache:/data
     environment:
-      - REDIS_ARGS=--maxmemory 512mb --maxmemory-policy allkeys-lru
+      - REDIS_ARGS=--maxmemory 512mb --maxmemory-policy allkeys-lfu
 
   placeholder:
     image: ghcr.io/branchard/open-placeholder:latest
