@@ -5,4 +5,13 @@ bannerPath: assets/banner.png
 import: github.com/branchard/traedis/pkg
 basePkg: traedis
 summary: 'Redis-backed HTTP cache for Traefik'
-testData: {}
+testData:
+  redis:
+    dsn: "redis://localhost:6379/0"
+    timeout: 50ms
+  statusCodes: [ 200 ]
+  defaultTtl: 5m
+  staleTtl: 1h
+  maxBodyBytes: 5242880
+  vary: [ Accept-Language ]
+  exposeKey: false
