@@ -1,7 +1,6 @@
 displayName: Traedis
 type: middleware
 iconPath: assets/icon.png
-bannerPath: assets/banner.png
 import: github.com/branchard/traedis/pkg
 basePkg: traedis
 summary: 'Redis-backed HTTP cache for Traefik'
