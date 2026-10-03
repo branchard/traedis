@@ -19,8 +19,22 @@ services:
     environment:
       - REDIS_ARGS=--maxmemory 512mb --maxmemory-policy allkeys-lfu
 
+  insight:
+    image: redis/redisinsight:latest
+    ports:
+      - "5540:5540"
+    environment:
+      RI_REDIS_HOST: cache
+      RI_REDIS_PORT: 6379
+      RI_REDIS_ALIAS: Cache
+      RI_REDIS_USERNAME: default
+      RI_ACCEPT_TERMS_AND_CONDITIONS: "true"
+    volumes:
+      - insight:/data
+
   placeholder:
     image: ghcr.io/branchard/open-placeholder:latest
 
 volumes:
   http-cache:
+  insight:
