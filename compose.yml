@@ -1,3 +1,5 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/compose-spec/compose-spec/master/schema/compose-spec.json
+# This file is used for testing during development
 services:
   ingress:
     image: traefik:v3.7
@@ -10,6 +12,8 @@ services:
 
   cache:
     image: redis:8-alpine
+    ports:
+      - "6379:6379"
     volumes:
       - http-cache:/data
     environment:
