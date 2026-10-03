@@ -4,8 +4,15 @@ http:
     placeholder:
       rule: PathPrefix(`/`)
       middlewares:
+        - ratelimit # before the cache: random URLs are misses that reach the backend
         - cache
       service: placeholder
+
+  middlewares:
+    ratelimit:
+      rateLimit:
+        average: 50 # requests per second per client IP
+        burst: 100
 
   services:
     placeholder:
