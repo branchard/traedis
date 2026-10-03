@@ -2,18 +2,11 @@ services:
   ingress:
     image: traefik:v3.7
     ports:
-      - "8080:8080"
-    develop:
-      watch:
-        - path: ./example/traefik.yml
-          target: /etc/traefik/traefik.yml
-          action: sync+restart
-        - path: ./example/placeholder.yml
-          target: /etc/traefik/dynamic/placeholder.yml
-          action: sync
-        - path: ./example/cache.yml
-          target: /etc/traefik/dynamic/cache.yml
-          action: sync
+      - "8080:80"
+      - "8081:8080"
+    volumes:
+      - ./example/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./example/dynamic:/etc/traefik/dynamic:ro
 
   cache:
     image: redis:8-alpine
