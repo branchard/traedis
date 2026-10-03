@@ -1,0 +1,206 @@
+// Package traedis is a Redis-backed HTTP cache middleware plugin for Traefik.
+package traedis
+
+import (
+	"errors"
+	"fmt"
+	"net"
+	"net/textproto"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const defaultRedisPort = "6379"
+
+// Config is the plugin configuration, as written in the Traefik dynamic configuration.
+type Config struct {
+	Redis        RedisConfig `json:"redis,omitempty"`
+	StatusCodes  []int       `json:"statusCodes,omitempty"`
+	DefaultTTL   string      `json:"defaultTtl,omitempty"`
+	StaleTTL     string      `json:"staleTtl,omitempty"`
+	MaxBodyBytes int64       `json:"maxBodyBytes,omitempty"`
+	Vary         []string    `json:"vary,omitempty"`
+	ExposeKey    bool        `json:"exposeKey,omitempty"`
+}
+
+// RedisConfig holds the Redis connection options.
+type RedisConfig struct {
+	DSN     string `json:"dsn,omitempty"`
+	Timeout string `json:"timeout,omitempty"`
+}
+
+// CreateConfig returns the default configuration (see example/dynamic/cache.yml).
+func CreateConfig() *Config {
+	return &Config{
+		Redis: RedisConfig{
+			DSN:     "redis://cache:6379/0",
+			Timeout: "50ms",
+		},
+		StatusCodes:  []int{200},
+		DefaultTTL:   "5m",
+		StaleTTL:     "1h",
+		MaxBodyBytes: 5 << 20,
+		Vary:         []string{},
+		ExposeKey:    false,
+	}
+}
+
+// settings is the validated, parsed form of Config.
+type settings struct {
+	redis        redisOptions
+	statusCodes  []int
+	defaultTTL   time.Duration
+	staleTTL     time.Duration
+	maxBodyBytes int64
+	vary         []string // canonical header names
+	exposeKey    bool
+}
+
+// redisOptions describes how to reach Redis. It holds credentials: never log it.
+type redisOptions struct {
+	addr     string
+	username string
+	password string
+	db       int
+	timeout  time.Duration
+}
+
+func parseConfig(cfg *Config) (settings, error) {
+	var s settings
+	if cfg == nil {
+		return s, errors.New("missing configuration")
+	}
+
+	redis, err := parseDSN(cfg.Redis.DSN)
+	if err != nil {
+		return s, err
+	}
+	if redis.timeout, err = parseDuration("redis.timeout", cfg.Redis.Timeout); err != nil {
+		return s, err
+	}
+	if redis.timeout <= 0 {
+		return s, errors.New("redis.timeout must be positive")
+	}
+	s.redis = redis
+
+	if s.defaultTTL, err = parseDuration("defaultTtl", cfg.DefaultTTL); err != nil {
+		return s, err
+	}
+	if s.staleTTL, err = parseDuration("staleTtl", cfg.StaleTTL); err != nil {
+		return s, err
+	}
+
+	for _, code := range cfg.StatusCodes {
+		if code < 100 || code > 599 {
+			return s, fmt.Errorf("statusCodes: invalid status code %d", code)
+		}
+	}
+	s.statusCodes = append([]int(nil), cfg.StatusCodes...)
+
+	if cfg.MaxBodyBytes <= 0 {
+		return s, errors.New("maxBodyBytes must be positive")
+	}
+	s.maxBodyBytes = cfg.MaxBodyBytes
+
+	if s.vary, err = parseVary(cfg.Vary); err != nil {
+		return s, err
+	}
+	s.exposeKey = cfg.ExposeKey
+
+	return s, nil
+}
+
+func parseDuration(name, value string) (time.Duration, error) {
+	d, err := time.ParseDuration(strings.TrimSpace(value))
+	if err != nil {
+		return 0, fmt.Errorf("%s: invalid duration %q", name, value)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("%s: negative duration %q", name, value)
+	}
+	return d, nil
+}
+
+// parseDSN parses redis://[user[:password]@]host[:port][/db].
+// Errors never include the DSN itself, which may hold credentials.
+func parseDSN(dsn string) (redisOptions, error) {
+	var o redisOptions
+	u, err := url.Parse(strings.TrimSpace(dsn))
+	if err != nil {
+		return o, errors.New("redis.dsn: malformed URL")
+	}
+	if u.Scheme != "redis" {
+		return o, errors.New("redis.dsn: scheme must be redis://")
+	}
+	if u.Hostname() == "" {
+		return o, errors.New("redis.dsn: missing host")
+	}
+	port := u.Port()
+	if port == "" {
+		port = defaultRedisPort
+	}
+	o.addr = net.JoinHostPort(u.Hostname(), port)
+
+	if u.User != nil {
+		o.username = u.User.Username()
+		o.password, _ = u.User.Password()
+	}
+
+	if db := strings.TrimPrefix(u.Path, "/"); db != "" {
+		n, err := strconv.Atoi(db)
+		if err != nil || n < 0 {
+			return o, errors.New("redis.dsn: database must be a non-negative integer")
+		}
+		o.db = n
+	}
+	return o, nil
+}
+
+func parseVary(names []string) ([]string, error) {
+	var out []string
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if !isToken(name) || name == "*" {
+			return nil, fmt.Errorf("vary: invalid header name %q", name)
+		}
+		name = textproto.CanonicalMIMEHeaderKey(name)
+		if name == "Cookie" || name == "Authorization" {
+			return nil, fmt.Errorf("vary: %s is not allowed (one variant per user)", name)
+		}
+		if !containsString(out, name) {
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
+// isToken reports whether s is a non-empty RFC 9110 token.
+func isToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !isTokenChar(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isTokenChar(c byte) bool {
+	if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+		return true
+	}
+	return strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}

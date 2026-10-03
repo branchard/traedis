@@ -1,0 +1,187 @@
+package traedis
+
+import (
+	"bufio"
+	"bytes"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+type hookStub struct {
+	calls   int
+	status  int
+	capture bool
+}
+
+func (h *hookStub) beforeHeader(status int, hdr http.Header) bool {
+	h.calls++
+	h.status = status
+	hdr.Add("X-Hook", "1")
+	return h.capture
+}
+
+// writerStub records the status codes written.
+type writerStub struct {
+	header http.Header
+	codes  []int
+	body   bytes.Buffer
+}
+
+func (w *writerStub) Header() http.Header         { return w.header }
+func (w *writerStub) WriteHeader(code int)        { w.codes = append(w.codes, code) }
+func (w *writerStub) Write(p []byte) (int, error) { return w.body.Write(p) }
+
+func TestRecorderCapturesBody(t *testing.T) {
+	rw := httptest.NewRecorder()
+	hook := &hookStub{capture: true}
+	rec := newRecorder(rw, hook, 1024)
+
+	rec.Header().Set("Content-Type", "text/plain")
+	_, _ = rec.Write([]byte("hello "))
+	_, _ = rec.Write([]byte("world"))
+
+	if rw.Code != 200 || rw.Body.String() != "hello world" || rw.Header().Get("X-Hook") != "1" {
+		t.Errorf("client got %d %q %v", rw.Code, rw.Body.String(), rw.Header())
+	}
+	if hook.calls != 1 || hook.status != 200 {
+		t.Errorf("hook called %d times with %d", hook.calls, hook.status)
+	}
+	if body, ok := rec.body(); !ok || string(body) != "hello world" {
+		t.Errorf("body() = %q, %v", body, ok)
+	}
+}
+
+func TestRecorderNoCaptureWhenHookDeclines(t *testing.T) {
+	rec := newRecorder(httptest.NewRecorder(), &hookStub{capture: false}, 1024)
+	rec.WriteHeader(http.StatusNotFound)
+	_, _ = rec.Write([]byte("nope"))
+	if _, ok := rec.body(); ok {
+		t.Error("body must not be captured")
+	}
+}
+
+func TestRecorderStreamsBodiesLargerThanMax(t *testing.T) {
+	rw := httptest.NewRecorder()
+	rec := newRecorder(rw, &hookStub{capture: true}, 10)
+	payload := strings.Repeat("x", 25)
+	for i := 0; i < len(payload); i += 5 {
+		_, _ = rec.Write([]byte(payload[i : i+5]))
+	}
+	if rw.Body.String() != payload {
+		t.Errorf("client got %d bytes, want %d", rw.Body.Len(), len(payload))
+	}
+	if _, ok := rec.body(); ok {
+		t.Error("an oversized body must not be captured")
+	}
+	if rec.buf.Cap() != 0 {
+		t.Error("the buffer must be released")
+	}
+}
+
+func TestRecorderSkipsCaptureForLargeContentLength(t *testing.T) {
+	rw := httptest.NewRecorder()
+	rec := newRecorder(rw, &hookStub{capture: true}, 10)
+	rec.Header().Set("Content-Length", "11")
+	rec.WriteHeader(200)
+	if rec.capture {
+		t.Error("capture must be off when Content-Length exceeds max")
+	}
+}
+
+func TestRecorderPassesInformationalResponses(t *testing.T) {
+	rw := &writerStub{header: http.Header{}}
+	hook := &hookStub{capture: true}
+	rec := newRecorder(rw, hook, 1024)
+	rec.WriteHeader(http.StatusEarlyHints)
+	rec.WriteHeader(http.StatusOK)
+	rec.WriteHeader(http.StatusInternalServerError) // superfluous
+	if len(rw.codes) != 2 || rw.codes[0] != 103 || rw.codes[1] != 200 {
+		t.Errorf("codes = %v, want [103 200]", rw.codes)
+	}
+	if hook.calls != 1 || hook.status != 200 {
+		t.Errorf("hook called %d times with %d", hook.calls, hook.status)
+	}
+}
+
+// Under Yaegi v0.16.1, compiled code cannot see Flush on an interpreted
+// ResponseWriter (see CLAUDE.md); the method still flushes the compiled writer
+// it wraps.
+func TestRecorderPreservesFlusher(t *testing.T) {
+	rw := httptest.NewRecorder()
+	rec := newRecorder(rw, &hookStub{}, 1024)
+	var w any = rec
+	f, ok := w.(http.Flusher)
+	if !ok {
+		t.Fatal("recorder must implement http.Flusher")
+	}
+	f.Flush()
+	if !rw.Flushed || rw.Code != 200 {
+		t.Errorf("flushed = %v, code = %d", rw.Flushed, rw.Code)
+	}
+}
+
+func TestRecorderPreservesHijacker(t *testing.T) {
+	recCh := make(chan *recorder, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		rec := newRecorder(w, &hookStub{capture: true}, 1024)
+		recCh <- rec
+		var rw http.ResponseWriter = rec
+		hj, ok := rw.(http.Hijacker)
+		if !ok {
+			t.Error("recorder must implement http.Hijacker")
+			return
+		}
+		conn, buf, err := hj.Hijack()
+		if err != nil {
+			t.Errorf("Hijack() = %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _ = buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nhijacked")
+		_ = buf.Flush()
+	}))
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_, _ = io.WriteString(conn, "GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if string(body) != "hijacked" {
+		t.Errorf("body = %q", body)
+	}
+	if _, ok := (<-recCh).body(); ok {
+		t.Error("a hijacked response must not be captured")
+	}
+}
+
+func TestRecorderPreservesTrailers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		rec := newRecorder(w, &hookStub{capture: true}, 1024)
+		rec.Header().Set("Trailer", "X-Checksum")
+		_, _ = rec.Write([]byte("body"))
+		rec.Header().Set("X-Checksum", "abc")
+	}))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if got := resp.Trailer.Get("X-Checksum"); got != "abc" {
+		t.Errorf("trailer = %q, want abc", got)
+	}
+}

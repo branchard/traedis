@@ -1,0 +1,238 @@
+package traedis
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+)
+
+var t0 = time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+
+func testSettings() settings {
+	s, err := parseConfig(CreateConfig())
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
+func TestParseCacheControl(t *testing.T) {
+	tests := []struct {
+		name   string
+		values []string
+		check  func(cc cacheControl) bool
+	}{
+		{name: "directive names are case-insensitive", values: []string{"No-Store, MAX-AGE=60"}, check: func(cc cacheControl) bool { return cc.noStore && cc.maxAge == 60 }},
+		{name: "directives across several lines", values: []string{"public", "s-maxage=10"}, check: func(cc cacheControl) bool { return cc.public && cc.sMaxAge == 10 }},
+		{name: "§5.2.2.4 qualified no-cache treated as unqualified", values: []string{`no-cache="Set-Cookie, X-Foo", max-age=5`}, check: func(cc cacheControl) bool { return cc.noCache && cc.maxAge == 5 && !cc.invalid }},
+		{name: "§5.2.2.7 qualified private treated as unqualified", values: []string{`private="Set-Cookie"`}, check: func(cc cacheControl) bool { return cc.private }},
+		{name: "quoted delta-seconds accepted", values: []string{`max-age="30"`}, check: func(cc cacheControl) bool { return cc.maxAge == 30 }},
+		{name: "§4.2.1 duplicate max-age is invalid", values: []string{"max-age=10", "max-age=20"}, check: func(cc cacheControl) bool { return cc.invalid && cc.maxAge == 10 }},
+		{name: "§4.2.1 malformed max-age is invalid", values: []string{"max-age=-1"}, check: func(cc cacheControl) bool { return cc.invalid }},
+		{name: "§1.2.2 delta-seconds overflow is capped", values: []string{"max-age=99999999999999999999"}, check: func(cc cacheControl) bool { return cc.maxAge == maxDeltaSeconds }},
+		{name: "unknown directives are ignored", values: []string{"immutable, stale-while-revalidate=5, max-age=1"}, check: func(cc cacheControl) bool { return cc.maxAge == 1 && !cc.invalid }},
+		{name: "absent values are -1", values: nil, check: func(cc cacheControl) bool { return cc.maxAge == -1 && cc.sMaxAge == -1 && cc.minFresh == -1 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if cc := parseCacheControl(tt.values); !tt.check(cc) {
+				t.Errorf("parseCacheControl(%q) = %+v", tt.values, cc)
+			}
+		})
+	}
+}
+
+func TestExplicitFreshness(t *testing.T) {
+	date := t0.Format(http.TimeFormat)
+	tests := []struct {
+		name         string
+		header       http.Header
+		want         time.Duration
+		wantExplicit bool
+	}{
+		{name: "§4.2.1 s-maxage wins over max-age", header: http.Header{"Cache-Control": {"max-age=10, s-maxage=20"}}, want: 20 * time.Second, wantExplicit: true},
+		{name: "§4.2.1 max-age wins over Expires", header: http.Header{"Cache-Control": {"max-age=10"}, "Date": {date}, "Expires": {t0.Add(time.Hour).Format(http.TimeFormat)}}, want: 10 * time.Second, wantExplicit: true},
+		{name: "§4.2.1 Expires minus Date", header: http.Header{"Date": {date}, "Expires": {t0.Add(time.Hour).Format(http.TimeFormat)}}, want: time.Hour, wantExplicit: true},
+		{name: "§4.2.1 Expires without Date uses response time", header: http.Header{"Expires": {t0.Add(time.Minute).Format(http.TimeFormat)}}, want: time.Minute, wantExplicit: true},
+		{name: "§5.3 invalid Expires means already expired", header: http.Header{"Expires": {"0"}}, want: 0, wantExplicit: true},
+		{name: "§4.2.1 duplicate Expires is stale", header: http.Header{"Expires": {date, date}}, want: 0, wantExplicit: true},
+		{name: "§4.2.1 Expires in the past", header: http.Header{"Date": {date}, "Expires": {t0.Add(-time.Hour).Format(http.TimeFormat)}}, want: 0, wantExplicit: true},
+		{name: "§4.2.1 invalid max-age is stale", header: http.Header{"Cache-Control": {"max-age=abc"}}, want: 0, wantExplicit: true},
+		{name: "no explicit freshness", header: http.Header{"Cache-Control": {"public"}}, want: 0, wantExplicit: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cc := parseCacheControl(tt.header.Values("Cache-Control"))
+			got, explicit := explicitFreshness(tt.header, cc, t0)
+			if got != tt.want || explicit != tt.wantExplicit {
+				t.Errorf("explicitFreshness() = %v, %v; want %v, %v", got, explicit, tt.want, tt.wantExplicit)
+			}
+		})
+	}
+}
+
+func TestCurrentAge(t *testing.T) {
+	tests := []struct {
+		name                      string
+		header                    http.Header
+		requestTime, responseTime time.Time
+		now                       time.Time
+		want                      time.Duration
+	}{
+		{name: "§4.2.3 resident time", header: http.Header{"Date": {t0.Format(http.TimeFormat)}}, requestTime: t0, responseTime: t0, now: t0.Add(30 * time.Second), want: 30 * time.Second},
+		{name: "§4.2.3 Age header is added", header: http.Header{"Date": {t0.Format(http.TimeFormat)}, "Age": {"100"}}, requestTime: t0, responseTime: t0, now: t0.Add(10 * time.Second), want: 110 * time.Second},
+		{name: "§4.2.3 response delay is added to Age", header: http.Header{"Age": {"100"}}, requestTime: t0, responseTime: t0.Add(2 * time.Second), now: t0.Add(2 * time.Second), want: 102 * time.Second},
+		{name: "§4.2.3 apparent age from an old Date", header: http.Header{"Date": {t0.Add(-time.Minute).Format(http.TimeFormat)}}, requestTime: t0, responseTime: t0, now: t0, want: time.Minute},
+		{name: "§4.2.3 Date in the future is clamped", header: http.Header{"Date": {t0.Add(time.Hour).Format(http.TimeFormat)}}, requestTime: t0, responseTime: t0, now: t0, want: 0},
+		{name: "§5.1 invalid Age is ignored", header: http.Header{"Age": {"-5"}}, requestTime: t0, responseTime: t0, now: t0, want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := currentAge(tt.header, tt.requestTime, tt.responseTime, tt.now); got != tt.want {
+				t.Errorf("currentAge() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStoreTTL(t *testing.T) {
+	date := t0.Format(http.TimeFormat)
+	tests := []struct {
+		name    string
+		method  string
+		reqHdr  http.Header
+		status  int
+		respHdr http.Header
+		mutate  func(s *settings)
+		want    time.Duration // 0 means not stored
+	}{
+		{name: "§3 explicit max-age stored with remaining freshness + staleTtl", status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}}, want: time.Minute + time.Hour},
+		{name: "TTL subtracts the initial age", status: 200, respHdr: http.Header{"Cache-Control": {"max-age=300"}, "Age": {"250"}}, want: 50*time.Second + time.Hour},
+		{name: "already stale on arrival is not stored", status: 200, respHdr: http.Header{"Cache-Control": {"max-age=300"}, "Age": {"300"}}},
+		{name: "§4.2.2 defaultTtl when no explicit freshness", status: 200, respHdr: http.Header{"Date": {date}}, want: 5*time.Minute + time.Hour},
+		{name: "defaultTtl 0 means not stored", status: 200, respHdr: http.Header{}, mutate: func(s *settings) { s.defaultTTL = 0 }},
+		{name: "§3 only GET is stored", method: http.MethodHead, status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}}},
+		{name: "§5.2.1.5 request no-store", reqHdr: http.Header{"Cache-Control": {"no-store"}}, status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}}},
+		{name: "§5.2.2.5 response no-store", status: 200, respHdr: http.Header{"Cache-Control": {"no-store, max-age=60"}}},
+		{name: "§5.2.2.7 private", status: 200, respHdr: http.Header{"Cache-Control": {"private, max-age=60"}}},
+		{name: "§5.2.2.7 qualified private", status: 200, respHdr: http.Header{"Cache-Control": {`private="X-User", max-age=60`}}},
+		{name: "§5.2.2.4 no-cache not stored without revalidation", status: 200, respHdr: http.Header{"Cache-Control": {"no-cache, max-age=60"}}},
+		{name: "statusCodes narrows: 404 not listed", status: 404, respHdr: http.Header{"Cache-Control": {"max-age=60"}}},
+		{name: "statusCodes narrows: 404 listed", status: 404, respHdr: http.Header{"Cache-Control": {"max-age=60"}}, mutate: func(s *settings) { s.statusCodes = []int{200, 404} }, want: time.Minute + time.Hour},
+		{name: "§4.2.2 defaultTtl only for heuristically cacheable codes", status: 302, respHdr: http.Header{}, mutate: func(s *settings) { s.statusCodes = []int{302} }},
+		{name: "§3 explicit freshness makes 302 storable when listed", status: 302, respHdr: http.Header{"Cache-Control": {"max-age=60"}}, mutate: func(s *settings) { s.statusCodes = []int{302} }, want: time.Minute + time.Hour},
+		{name: "206 never stored", status: 206, respHdr: http.Header{"Cache-Control": {"max-age=60"}}, mutate: func(s *settings) { s.statusCodes = []int{206} }},
+		{name: "Content-Range never stored", status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Content-Range": {"bytes 0-1/2"}}},
+		{name: "304 never stored", status: 304, respHdr: http.Header{"Cache-Control": {"max-age=60"}}, mutate: func(s *settings) { s.statusCodes = []int{304} }},
+		{name: "§3.5 Authorization without permission", reqHdr: http.Header{"Authorization": {"Bearer x"}}, status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}}},
+		{name: "§3.5 Authorization with public", reqHdr: http.Header{"Authorization": {"Bearer x"}}, status: 200, respHdr: http.Header{"Cache-Control": {"public, max-age=60"}}, want: time.Minute + time.Hour},
+		{name: "§3.5 Authorization with s-maxage", reqHdr: http.Header{"Authorization": {"Bearer x"}}, status: 200, respHdr: http.Header{"Cache-Control": {"s-maxage=60"}}, want: time.Minute + time.Hour},
+		{name: "§3.5 Authorization with must-revalidate", reqHdr: http.Header{"Authorization": {"Bearer x"}}, status: 200, respHdr: http.Header{"Cache-Control": {"must-revalidate, max-age=60"}}, want: time.Minute + time.Hour},
+		{name: "no defaultTtl for Authorization even if public", reqHdr: http.Header{"Authorization": {"Bearer x"}}, status: 200, respHdr: http.Header{"Cache-Control": {"public"}}},
+		{name: "no defaultTtl for requests with Cookie", reqHdr: http.Header{"Cookie": {"sid=1"}}, status: 200, respHdr: http.Header{}},
+		{name: "explicit freshness for requests with Cookie", reqHdr: http.Header{"Cookie": {"sid=1"}}, status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}}, want: time.Minute + time.Hour},
+		{name: "Set-Cookie without public", status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Set-Cookie": {"sid=1"}}},
+		{name: "Set-Cookie with public", status: 200, respHdr: http.Header{"Cache-Control": {"public, max-age=60"}, "Set-Cookie": {"sid=1"}}, want: time.Minute + time.Hour},
+		{name: "no defaultTtl for Set-Cookie even if public", status: 200, respHdr: http.Header{"Cache-Control": {"public"}, "Set-Cookie": {"sid=1"}}},
+		{name: "Vary not supported yet", status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Vary": {"Accept-Encoding"}}},
+		{name: "vary option not supported yet", status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}}, mutate: func(s *settings) { s.vary = []string{"Accept-Language"} }},
+		{name: "trailers not stored", status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Trailer": {"X-Checksum"}}},
+		{name: "§4.2.1 Expires-based freshness", status: 200, respHdr: http.Header{"Date": {date}, "Expires": {t0.Add(10 * time.Minute).Format(http.TimeFormat)}}, want: 10*time.Minute + time.Hour},
+		{name: "§5.3 invalid Expires not stored", status: 200, respHdr: http.Header{"Expires": {"0"}}},
+		{name: "staleTtl 0", status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}}, mutate: func(s *settings) { s.staleTTL = 0 }, want: time.Minute},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			method := tt.method
+			if method == "" {
+				method = http.MethodGet
+			}
+			req := httptest.NewRequest(method, "http://example.com/", nil)
+			for k, v := range tt.reqHdr {
+				req.Header[k] = v
+			}
+			cfg := testSettings()
+			if tt.mutate != nil {
+				tt.mutate(&cfg)
+			}
+			got, ok := storeTTL(req, tt.status, tt.respHdr, cfg, t0, t0)
+			if ok != (tt.want > 0) || got != tt.want {
+				t.Errorf("storeTTL() = %v, %v; want %v", got, ok, tt.want)
+			}
+		})
+	}
+}
+
+func TestLookupAllowed(t *testing.T) {
+	tests := []struct {
+		name   string
+		header http.Header
+		want   bool
+	}{
+		{name: "plain request", header: http.Header{}, want: true},
+		{name: "§5.2.1.4 request no-cache", header: http.Header{"Cache-Control": {"no-cache"}}, want: false},
+		{name: "§5.4 Pragma no-cache without Cache-Control", header: http.Header{"Pragma": {"no-cache"}}, want: false},
+		{name: "§5.4 Pragma ignored when Cache-Control is present", header: http.Header{"Pragma": {"no-cache"}, "Cache-Control": {"max-age=10"}}, want: true},
+		{name: "§5.2.1.5 request no-store may still be served", header: http.Header{"Cache-Control": {"no-store"}}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+			req.Header = tt.header
+			if got := lookupAllowed(req); got != tt.want {
+				t.Errorf("lookupAllowed() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestServable(t *testing.T) {
+	tests := []struct {
+		name          string
+		reqCC         string
+		age, lifetime time.Duration
+		want          bool
+	}{
+		{name: "§4.2 fresh", age: 10 * time.Second, lifetime: time.Minute, want: true},
+		{name: "§4.2 stale when age equals lifetime", age: time.Minute, lifetime: time.Minute, want: false},
+		{name: "§5.2.1.1 request max-age satisfied", reqCC: "max-age=10", age: 10 * time.Second, lifetime: time.Minute, want: true},
+		{name: "§5.2.1.1 request max-age exceeded", reqCC: "max-age=10", age: 11 * time.Second, lifetime: time.Minute, want: false},
+		{name: "§5.2.1.1 request max-age=0", reqCC: "max-age=0", age: time.Second, lifetime: time.Minute, want: false},
+		{name: "§5.2.1.3 min-fresh satisfied", reqCC: "min-fresh=30", age: 30 * time.Second, lifetime: time.Minute, want: true},
+		{name: "§5.2.1.3 min-fresh not satisfied", reqCC: "min-fresh=31", age: 30 * time.Second, lifetime: time.Minute, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cc := parseCacheControl([]string{tt.reqCC})
+			if got := servable(cc, tt.age, tt.lifetime); got != tt.want {
+				t.Errorf("servable() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHeaderToStore(t *testing.T) {
+	h := http.Header{
+		"Content-Type":      {"text/plain"},
+		"Connection":        {"X-Hop"},
+		"X-Hop":             {"1"},
+		"Keep-Alive":        {"timeout=5"},
+		"Transfer-Encoding": {"chunked"},
+		"Content-Length":    {"12"},
+		"Set-Cookie":        {"sid=1"},
+		"Age":               {"3"},
+	}
+	got := headerToStore(h)
+	for _, name := range []string{"Connection", "X-Hop", "Keep-Alive", "Transfer-Encoding", "Content-Length", "Set-Cookie"} {
+		if got.Get(name) != "" {
+			t.Errorf("%s must not be stored", name)
+		}
+	}
+	if got.Get("Content-Type") != "text/plain" || got.Get("Age") != "3" {
+		t.Errorf("end-to-end fields must be stored: %v", got)
+	}
+	if h.Get("Set-Cookie") == "" {
+		t.Error("the original header must not be modified")
+	}
+}
