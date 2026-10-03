@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://json.schemastore.org/traefik-v3-file-provider.json
+http:
+  middlewares:
+    cache:
+      plugin:
+        traedis:
+          # All keys are optional; the values below are the defaults
+          redis:
+            dsn: "redis://cache:6379/0"   # Redis connection string, including optional credentials and database number
+            timeout: 50ms                 # Maximum time allowed for a Redis operation before bypassing the cache
+          statusCodes: [ 200 ]            # Restricts which RFC-cacheable status codes get stored (cannot make others cacheable)
+          defaultTtl: 5m                  # Freshness when the backend sends no max-age/s-maxage/Expires; 0 = don't cache such responses
+          staleTtl: 1h                    # How long past expiry an entry is kept and may be served stale (only when the RFC allows it)
+          maxBodyBytes: 5242880           # Larger responses are streamed through, not cached (5 MiB)
+          vary: [ ]                       # Request headers treated as if listed in the response Vary header (one variant per value)
+          exposeKey: false                # Add key="…" to the Cache-Status response header
