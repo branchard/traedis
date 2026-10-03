@@ -9,7 +9,6 @@ providers:
     watch: true
 
 experimental:
-  plugins:
+  localPlugins:
     traedis:
       moduleName: github.com/branchard/traedis
-      version: v0.0.1
