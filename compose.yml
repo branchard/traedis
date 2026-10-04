@@ -49,7 +49,7 @@ services:
 
   # Image backend sending `Cache-Control: max-age`: exercises explicit freshness → http://localhost:8080/600x400
   placeholder:
-    image: ghcr.io/branchard/open-placeholder:latest
+    image: ghcr.io/open-placeholder/open-placeholder:sha-8a81d5c
 
   # Redis Insight, to browse the cached entries → http://localhost:5540
   insight:
