@@ -1,3 +1,6 @@
+> [!WARNING]
+> **This project is a work in progress.** Use it at your own risk.
+
 <p align="center">
   <img src="assets/icon.png" alt="Traedis Logo" width="480">
 </p>
