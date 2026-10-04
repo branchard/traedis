@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://json.schemastore.org/traefik-v3-file-provider.json
+http:
+  routers:
+    whoami:
+      rule: PathPrefix(`/whoami`)
+      middlewares:
+        - cache
+      service: whoami
+
+  services:
+    whoami:
+      loadBalancer:
+        servers:
+          - url: "http://whoami:80"

@@ -13,6 +13,8 @@ api:
   dashboard: true
   insecure: true
 
+ping: {} # used by the container healthcheck
+
 entryPoints:
   web:
     address: ":80"

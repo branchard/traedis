@@ -1,1 +1,49 @@
-TODO
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  # Unit tests
+  unit:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:8-alpine
+        ports: [ "6379:6379" ]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    env:
+      TRAEDIS_REDIS_DSN: redis://localhost:6379/15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test -race ./...
+      # The interpreter Traefik v3.7 embeds: this is what runs in production.
+      - run: go install github.com/traefik/yaegi/cmd/yaegi@v0.16.1
+      - run: yaegi test -v .
+        working-directory: pkg
+
+  # End-to-end tests: the plugin loaded by Traefik (Yaegi), with Redis and the sample backends
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # --wait: until healthy (ingress, cache, whoami) or running (placeholder has no healthcheck)
+      - run: docker compose up -d --wait --wait-timeout 120 ingress cache whoami placeholder
+      - run: ./e2e.sh
+      - name: Logs
+        if: failure()
+        run: docker compose logs --no-color
+      - if: always()
+        run: docker compose down --volumes

@@ -1,25 +1,57 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/compose-spec/compose-spec/master/schema/compose-spec.json
-# This file is used for testing during development
+# Local stack for development and end-to-end tests
 services:
+  # Traefik container that loads the plugin
   ingress:
     image: traefik:v3.7
     ports:
       - "8080:80"
-      - "8081:8080"
+      - "8081:8080" # Dashboard
     volumes:
       - ./example/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./example/dynamic:/etc/traefik/dynamic:ro
       - .:/plugins-local/src/github.com/branchard/traedis:ro
+    develop:
+      watch:
+        - path: ./example/traefik.yml
+          action: restart
+        - path: .traefik.yml
+          action: restart
+        - path: ./pkg
+          action: restart
+        - path: go.mod
+          action: restart
+    healthcheck:
+      test: [ "CMD", "traefik", "healthcheck" ] # Requires `ping` in example/traefik.yml
+      interval: 2s
+      timeout: 2s
+      retries: 15
 
+  # Redis, where the plugin stores cached responses (>= 8.0 required)
   cache:
     image: redis:8-alpine
     ports:
-      - "6379:6379"
+      - "6379:6379" # For integration tests: TRAEDIS_REDIS_DSN=redis://localhost:6379/15
     volumes:
       - http-cache:/data
     environment:
+      # Bounded memory: the least frequently used entries are evicted first
       - REDIS_ARGS=--maxmemory 512mb --maxmemory-policy allkeys-lfu
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 2s
+      timeout: 2s
+      retries: 15
 
+  # Backend without Cache-Control: exercises `defaultTtl` → http://localhost:8080/whoami
+  whoami:
+    image: traefik/whoami:latest
+
+  # Image backend sending `Cache-Control: max-age`: exercises explicit freshness → http://localhost:8080/600x400
+  placeholder:
+    image: ghcr.io/branchard/open-placeholder:latest
+
+  # Redis Insight, to browse the cached entries → http://localhost:5540
   insight:
     image: redis/redisinsight:latest
     ports:
@@ -33,14 +65,12 @@ services:
     volumes:
       - insight:/data
 
-  placeholder:
-    image: ghcr.io/branchard/open-placeholder:latest
-
+  # Trace viewer receiving Traefik's OTLP traces, to check that the plugin keeps trace propagation intact
   tracer:
     image: ghcr.io/branchard/onetrace:2
     ports:
-      - "14318:14318"   # UI → http://localhost:14318
-      - "14317:4317"    # OTLP gRPC direct
+      - "14318:14318" # UI → http://localhost:14318
+      - "14317:4317"  # OTLP gRPC, from the host
     environment:
       SECRET: 8a922E7b6f64_c1c6dafc022Z63b26a1410
       SITE_URL: http://localhost:14318
