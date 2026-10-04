@@ -7,6 +7,8 @@
 
 # Traedis
 
+[![CI](https://github.com/branchard/traedis/actions/workflows/ci.yml/badge.svg)](https://github.com/branchard/traedis/actions/workflows/ci.yml)
+
 Redis-backed HTTP cache for Traefik, shipped as a **Traefik v3 middleware plugin**: it stores backend
 responses in Redis and serves them according to [RFC 9111](https://www.rfc-editor.org/rfc/rfc9111)
 (HTTP caching, as a shared cache).
