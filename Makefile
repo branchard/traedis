@@ -1,6 +1,6 @@
 # @see: https://stackoverflow.com/a/70550568
 MAKEFLAGS += --no-print-directory
-.PHONY: help start stop clean unwatch unit e2e
+.PHONY: help start stop clean unwatch unit e2e bench
 
 ##@ Global
 help: ## Show this help
@@ -31,3 +31,9 @@ e2e: stop ## Run end-to-end tests
 	docker compose up -d --wait --wait-timeout 120
 	@# Always stop the containers, even when a test fails
 	./e2e.sh; status=$$?; docker compose down; exit $$status
+
+bench: export TRAEDIS_REDIS_DSN = redis://localhost:6379/15
+bench: stop ## Run benchmarks, compiled and under Yaegi (BASE=<git ref> to compare with that version)
+	docker compose up -d --wait --wait-timeout 120 cache
+	@# Always stop the containers, even when a benchmark fails
+	./benchmark/bench.sh $(BASE); status=$$?; docker compose down; exit $$status
