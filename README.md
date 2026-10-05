@@ -75,13 +75,6 @@ http:
           - url: "http://my-app:3000"
 ```
 
-```console
-$ curl -s -o /dev/null -D - https://app.example.com/logo.png | grep -i cache-status
-Cache-Status: traedis; fwd=uri-miss; fwd-status=200
-$ curl -s -o /dev/null -D - https://app.example.com/logo.png | grep -i cache-status
-Cache-Status: traedis; hit; ttl=599
-```
-
 A complete local setup (Traefik, Redis, sample backends) is available in [`compose.yml`](compose.yml)
 and [`example/`](example).
 
@@ -119,12 +112,17 @@ forwarded as is, with `Cache-Status: traedis; fwd=method` or `fwd=bypass`.
 
 ## Development
 
+Requires Docker (with Compose), Go and the [Yaegi](https://github.com/traefik/yaegi) version embedded in Traefik v3.7: `go install github.com/traefik/yaegi/cmd/yaegi@v0.16.1`.
+
 ```bash
-make up                                                   # Traefik on :8080, Redis on :6379
-go test -race ./...                                       # unit tests
-(cd pkg && yaegi test -v .)                               # same tests under Yaegi, as Traefik runs them
-TRAEDIS_REDIS_DSN=redis://localhost:6379/15 go test ./... # with Redis integration tests
+make start  # start the local stack; Traefik restarts whenever the plugin code changes
+make stop   # stop the stack (`make clean` also removes the volumes)
+make unit   # go vet, then unit and Redis integration tests, compiled and under Yaegi
+make e2e    # end-to-end tests, through Traefik
+make help   # list all targets
 ```
+
+Once started, Traefik listens on <http://localhost:8080>: try `curl -i http://localhost:8080/600x400` twice and watch the `Cache-Status` header.
 
 ## License
 
