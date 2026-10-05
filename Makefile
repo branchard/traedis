@@ -1,14 +1,14 @@
 # @see: https://stackoverflow.com/a/70550568
 MAKEFLAGS += --no-print-directory
-.PHONY: help start stop clean
+.PHONY: help start stop clean unwatch unit e2e
 
 ##@ Global
 help: ## Show this help
 	@# @see: https://www.avonture.be/blog/makefile-help/
 	@awk 'BEGIN { FS = ":.*##"; printf "Usage:\n  make \033[36m<target>\033[0m\n\nTargets:\n" } \
-		/^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+		/^[a-zA-Z0-9_-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
-start: unwatch ## Start containers with Docker Compose
+start: unwatch ## Start containers with Docker Compose and Docker Compose Watch
 	docker compose up -d --force-recreate
 	nohup docker compose watch </dev/null >/dev/null 2>&1 & echo $$! > /tmp/compose-watch.traedis.pid
 
@@ -18,7 +18,7 @@ stop: unwatch ## Stop and delete all containers
 clean: unwatch ## Stop, delete all containers and remove volumes
 	docker compose down --remove-orphans --volumes
 
-unwatch:
+unwatch: ## Stop Docker Compose Watch
 	@if [ -f /tmp/compose-watch.traedis.pid ]; then kill $$(cat /tmp/compose-watch.traedis.pid) 2>/dev/null || true; rm -f /tmp/compose-watch.traedis.pid; fi
 
 unit: export TRAEDIS_REDIS_DSN = redis://localhost:6379/15
