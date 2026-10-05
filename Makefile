@@ -20,3 +20,14 @@ clean: unwatch ## Stop, delete all containers and remove volumes
 
 unwatch:
 	@if [ -f /tmp/compose-watch.traedis.pid ]; then kill $$(cat /tmp/compose-watch.traedis.pid) 2>/dev/null || true; rm -f /tmp/compose-watch.traedis.pid; fi
+
+unit: export TRAEDIS_REDIS_DSN = redis://localhost:6379/15
+unit: stop ## Run unit and Redis integration tests (compiled Go, then Yaegi)
+	docker compose up -d --wait --wait-timeout 120 cache
+	@# Always stop the containers, even when a test fails
+	go vet ./... && go test -race ./... && (cd pkg && yaegi test -v .); status=$$?; docker compose down; exit $$status
+
+e2e: stop ## Run end-to-end tests
+	docker compose up -d --wait --wait-timeout 120
+	@# Always stop the containers, even when a test fails
+	./e2e.sh; status=$$?; docker compose down; exit $$status
