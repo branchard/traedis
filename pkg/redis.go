@@ -1,3 +1,13 @@
+// Why a hand-written client instead of github.com/redis/go-redis: Traefik runs
+// the plugin through Yaegi v0.16.1, which cannot load go-redis (checked with
+// v9.8.0, the first with HSETEX, up to v9.23.0):
+//   - it imports unsafe and syscall, which Yaegi does not expose to plugins by
+//     default; even with unsafe allowed, recent versions need unsafe.String,
+//     which Yaegi lacks, and a Go version newer than the Go 1.22 stdlib it exposes;
+//   - its connection pool relies on select statements, which Yaegi runs
+//     incorrectly from several goroutines (see redisClient);
+//   - it would have to be vendored: tens of thousands of lines, for HGET and HSETEX.
+
 package traedis
 
 import (
@@ -8,6 +18,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"reflect"
 	"strconv"
 	"sync"
 	"time"
@@ -32,11 +43,16 @@ func (e redisError) Error() string { return "redis: " + string(e) }
 
 // redisClient is a minimal RESP2 client with a bounded connection pool.
 // Every operation is bounded by the configured timeout.
+//
+// The pool uses no select statement: Yaegi v0.16.1 shares the operands of a
+// select between the goroutines running it, which hands one connection to two
+// requests.
 type redisClient struct {
 	opts     redisOptions
 	maxBulk  int64
-	sem      chan struct{}   // one token per open connection
-	idle     chan *redisConn // idle connections
+	sem      chan struct{} // one token per connection in use
+	idleMu   sync.Mutex
+	idle     []*redisConn // at most redisPoolSize: only token holders add to it
 	logMu    sync.Mutex
 	lastLog  time.Time
 	logCount int
@@ -60,7 +76,6 @@ func newRedisClient(opts redisOptions, maxBulk int64) *redisClient {
 		opts:    opts,
 		maxBulk: maxBulk,
 		sem:     make(chan struct{}, redisPoolSize),
-		idle:    make(chan *redisConn, redisPoolSize),
 	}
 }
 
@@ -126,17 +141,29 @@ func (c *redisClient) do(ctx context.Context, args ...[]byte) (reply, error) {
 	return r, nil
 }
 
+// acquire waits for a pool token, until ctx is done, then returns an idle
+// connection or dials a new one.
 func (c *redisClient) acquire(ctx context.Context) (*redisConn, error) {
-	select {
-	case c.sem <- struct{}{}:
-	case <-ctx.Done():
+	// select { case c.sem <- struct{}{}: case <-ctx.Done(): }, with operands of our own.
+	chosen, _, _ := reflect.Select([]reflect.SelectCase{
+		{Dir: reflect.SelectSend, Chan: reflect.ValueOf(c.sem), Send: reflect.ValueOf(struct{}{})},
+		{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ctx.Done())},
+	})
+	if chosen != 0 {
 		return nil, fmt.Errorf("redis: pool exhausted: %w", ctx.Err())
 	}
-	select {
-	case conn := <-c.idle:
-		return conn, nil
-	default:
+
+	var conn *redisConn
+	c.idleMu.Lock()
+	if n := len(c.idle); n > 0 {
+		conn = c.idle[n-1]
+		c.idle = c.idle[:n-1]
 	}
+	c.idleMu.Unlock()
+	if conn != nil {
+		return conn, nil
+	}
+
 	conn, err := c.dial(ctx)
 	if err != nil {
 		<-c.sem
@@ -148,11 +175,9 @@ func (c *redisClient) acquire(ctx context.Context) (*redisConn, error) {
 // release returns a healthy connection to the pool (nil for a closed one).
 func (c *redisClient) release(conn *redisConn) {
 	if conn != nil {
-		select {
-		case c.idle <- conn:
-		default:
-			_ = conn.nc.Close()
-		}
+		c.idleMu.Lock()
+		c.idle = append(c.idle, conn)
+		c.idleMu.Unlock()
 	}
 	<-c.sem
 }

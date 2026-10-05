@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -15,6 +16,9 @@ import (
 	"testing"
 	"time"
 )
+
+// echoKey, as a reply, answers a command with its key as a bulk string.
+const echoKey = "echo-key"
 
 // fakeRedis is a scripted RESP server: replies maps a command name to its raw
 // reply (defaultReplies otherwise); an empty reply means never answering.
@@ -87,6 +91,9 @@ func (f *fakeRedis) handle(c net.Conn) {
 		resp := f.replies[args[0]]
 		if resp == "" {
 			continue // never answer
+		}
+		if resp == echoKey {
+			resp = "$" + strconv.Itoa(len(args[1])) + "\r\n" + args[1] + "\r\n"
 		}
 		if _, err := io.WriteString(c, resp); err != nil {
 			return
@@ -291,6 +298,58 @@ func TestRedisPoolExhausted(t *testing.T) {
 	}
 	if accepts := f.connections(); accepts != 0 {
 		t.Errorf("connections = %d, want 0", accepts)
+	}
+}
+
+func TestRedisPoolWaitsForAConnection(t *testing.T) {
+	f := newFakeRedis(t, nil)
+	c := newRedisClient(redisOptions{addr: f.ln.Addr().String(), timeout: 2 * time.Second}, 1024)
+	for i := 0; i < redisPoolSize; i++ {
+		c.sem <- struct{}{}
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		<-c.sem
+	}()
+	start := time.Now()
+	if v, err := c.get(context.Background(), "k", ""); err != nil || string(v) != "hello" {
+		t.Fatalf("get() = %q, %v, want the value once a connection is free", v, err)
+	}
+	if elapsed := time.Since(start); elapsed < 30*time.Millisecond {
+		t.Errorf("get() took %v: it did not wait for the pool", elapsed)
+	}
+}
+
+// Regression test, failing under `yaegi test` only: Yaegi v0.16.1 shares the
+// operands of a select statement between the goroutines running it, so the pool
+// handed one connection to two requests, which read each other's replies.
+func TestRedisPoolConcurrency(t *testing.T) {
+	const workers, rounds = 32, 100
+	f := newFakeRedis(t, map[string]string{"HGET": echoKey})
+	c := newRedisClient(redisOptions{addr: f.ln.Addr().String(), timeout: 5 * time.Second}, 1024)
+
+	failures := make(chan string, workers)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(key string) {
+			defer wg.Done()
+			for i := 0; i < rounds; i++ {
+				v, err := c.get(context.Background(), key, "")
+				if err != nil || string(v) != key {
+					failures <- "get(" + key + ") = " + strconv.Quote(string(v)) + ", " + fmt.Sprint(err)
+					return
+				}
+			}
+		}("key-" + strconv.Itoa(w))
+	}
+	wg.Wait()
+	close(failures)
+	for failure := range failures {
+		t.Error(failure)
+	}
+	if accepts := f.connections(); accepts > redisPoolSize {
+		t.Errorf("connections = %d, want at most %d", accepts, redisPoolSize)
 	}
 }
 

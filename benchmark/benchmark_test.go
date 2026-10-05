@@ -115,6 +115,27 @@ func BenchmarkHit(b *testing.B) {
 	}
 }
 
+// BenchmarkHitParallel is BenchmarkHit/1KB from GOMAXPROCS goroutines: it adds
+// the contention on the Redis connection pool.
+func BenchmarkHitParallel(b *testing.B) {
+	h := newHandler(b, &backend{body: make([]byte, 1<<10), cacheControl: longLived}, defaultMaxBody)
+	path := "/hit-parallel?b=2&a=1"
+	serve(h, newRequest(http.MethodGet, path), &bytes.Buffer{}) // stored here
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		req := newRequest(http.MethodGet, path)
+		buf := &bytes.Buffer{}
+		for pb.Next() {
+			rec := serve(h, req, buf)
+			if got := rec.Header().Get("Cache-Status"); !strings.Contains(got, "hit") {
+				b.Errorf("Cache-Status = %q, want a hit", got)
+				return
+			}
+		}
+	})
+}
+
 // BenchmarkMiss requests a new URL every time: key, HGET, recording, encoding, HSETEX.
 func BenchmarkMiss(b *testing.B) {
 	h := newHandler(b, &backend{body: make([]byte, 1<<10), cacheControl: shortLived}, defaultMaxBody)
