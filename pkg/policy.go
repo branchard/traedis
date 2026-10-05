@@ -2,6 +2,7 @@ package traedis
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -211,7 +212,7 @@ func storeTTL(req *http.Request, status int, h http.Header, cfg settings, reques
 	if parseCacheControl(req.Header.Values("Cache-Control")).noStore {
 		return 0, false
 	}
-	if !containsInt(cfg.statusCodes, status) || status < 200 || status == http.StatusPartialContent ||
+	if !slices.Contains(cfg.statusCodes, status) || status < 200 || status == http.StatusPartialContent ||
 		status == http.StatusNotModified || h.Get("Content-Range") != "" {
 		return 0, false
 	}
@@ -325,15 +326,6 @@ func hasHeaderValue(h http.Header, name string) bool {
 func hasTrailerPrefix(h http.Header) bool {
 	for name := range h {
 		if strings.HasPrefix(name, http.TrailerPrefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func containsInt(list []int, n int) bool {
-	for _, v := range list {
-		if v == n {
 			return true
 		}
 	}
