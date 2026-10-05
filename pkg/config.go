@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/textproto"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -169,7 +170,7 @@ func parseVary(names []string) ([]string, error) {
 		if name == "Cookie" || name == "Authorization" {
 			return nil, fmt.Errorf("vary: %s is not allowed (one variant per user)", name)
 		}
-		if !containsString(out, name) {
+		if !slices.Contains(out, name) {
 			out = append(out, name)
 		}
 	}
@@ -194,13 +195,4 @@ func isTokenChar(c byte) bool {
 		return true
 	}
 	return strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0
-}
-
-func containsString(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
