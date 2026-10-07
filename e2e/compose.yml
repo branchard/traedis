@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/compose-spec/compose-spec/master/schema/compose-spec.json
+# Tools for end-to-end tests
+services:
+  # Test runner of e2e/run.sh: never started by `docker compose up`, only by `docker compose run hurl`
+  hurl:
+    image: ghcr.io/orange-opensource/hurl:7.1.0
+    profiles: [ e2e ]
+    volumes:
+      - ./:/e2e:ro
+      - ./:/report # junit.xml
+    environment:
+      - HURL_VARIABLE_base_url=http://ingress

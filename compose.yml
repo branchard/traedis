@@ -2,6 +2,7 @@
 # Local stack for development and tests
 include:
   - path: benchmark/compose.yml
+  - path: e2e/compose.yml
 
 services:
   # Traefik container that loads the plugin

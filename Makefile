@@ -27,10 +27,10 @@ unit: stop ## Run unit and Redis integration tests (compiled Go, then Yaegi)
 	@# Always stop the containers, even when a test fails
 	go vet ./... && go test -race ./... && (cd pkg && yaegi test -v .); status=$$?; docker compose down; exit $$status
 
-e2e: stop ## Run end-to-end tests
+e2e: stop ## Run end-to-end tests (Hurl through Traefik)
 	docker compose up -d --wait --wait-timeout 120
 	@# Always stop the containers, even when a test fails
-	./e2e.sh; status=$$?; docker compose down; exit $$status
+	./e2e/run.sh; status=$$?; docker compose down; exit $$status
 
 bench: stop ## Run benchmarks (under Yaegi, then k6 through Traefik) into benchmark/results.json
 	docker compose up -d --wait --wait-timeout 120 ingress cache whoami placeholder
