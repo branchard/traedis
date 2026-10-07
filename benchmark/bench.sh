@@ -1,90 +1,57 @@
 #!/usr/bin/env bash
-# Benchmarks: runs benchmark_test.go compiled and under Yaegi (what Traefik runs),
-# on the working tree and, when a git ref is given, on that version of the plugin
-# too, then compares them with benchstat.
+# Benchmarks of the working tree, written as JSON to benchmark/results.json:
+#   - "yaegi": benchmark_test.go, the handler called in-process under Yaegi (what
+#     Traefik runs): time, bytes and allocations per operation;
+#   - "k6": load.js, HTTP load through Traefik: each sample backend without the
+#     cache (direct) and with it (hit, miss).
 #
-#   docker compose up -d --wait cache
-#   export TRAEDIS_REDIS_DSN=redis://localhost:6379/15
-#   ./benchmark/bench.sh          # working tree: compiled vs Yaegi
-#   ./benchmark/bench.sh main     # main vs working tree
+#   docker compose up -d --wait ingress cache whoami placeholder
+#   ./benchmark/bench.sh
 #
-# COUNT (10), BENCHTIME (500ms) and BENCH (.) are passed to -count, -benchtime and
-# -bench. Raw results and report.txt are written to benchmark/results/.
+# BENCH (.) and BENCHTIME (2s) are passed to -bench and -benchtime; LOAD_VUS (10)
+# and LOAD_SECONDS (10) are the concurrency and the duration of each k6 case.
 set -euo pipefail
 
-BASE="${1:-}"
-COUNT="${COUNT:-10}"
-BENCHTIME="${BENCHTIME:-500ms}"
 BENCH="${BENCH:-.}"
+BENCHTIME="${BENCHTIME:-2s}"
+export TRAEDIS_REDIS_DSN="${TRAEDIS_REDIS_DSN:-redis://localhost:6379/15}"
 
 MODULE="github.com/branchard/traedis"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-RESULTS="$ROOT/benchmark/results"
+RESULTS="$ROOT/benchmark/results.json"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-: "${TRAEDIS_REDIS_DSN:?must point to a Redis >= 8.0, e.g. redis://localhost:6379/15}"
 if ! command -v yaegi >/dev/null; then
   echo "yaegi not found: go install github.com/traefik/yaegi/cmd/yaegi@v0.16.1" >&2
   exit 1
 fi
 
-# stage <name> [git ref]: a GOPATH holding one version of the plugin (the working
-# tree without a ref) next to the benchmarks of the working tree, so that every
-# version is measured by the same code. Yaegi only resolves the plugin's import
-# path inside a GOPATH.
-stage() {
-  local dir="$TMP/$1/src/$MODULE"
-  mkdir -p "$dir/benchmark"
-  if [[ -n "${2:-}" ]]; then
-    git -C "$ROOT" archive "$2" go.mod pkg | tar -x -C "$dir"
-  else
-    cp -r "$ROOT/go.mod" "$ROOT/pkg" "$dir"
-  fi
-  cp "$ROOT"/benchmark/*.go "$dir/benchmark"
-}
+echo "# Yaegi: benchmark_test.go" >&2
+# Yaegi only resolves the plugin's import path inside a GOPATH: a link to the
+# working tree is enough.
+mkdir -p "$TMP/src/$(dirname "$MODULE")"
+ln -s "$ROOT" "$TMP/src/$MODULE"
+(cd "$TMP/src/$MODULE/benchmark" &&
+  GOPATH="$TMP" yaegi test -run '^$' -bench "$BENCH" -benchmem -benchtime "$BENCHTIME" .) | tee "$TMP/yaegi.txt" >&2
 
-# run <name>: one more sample of every benchmark, appended to the results.
-run() {
-  local args=(-run '^$' -bench "$BENCH" -benchmem -benchtime "$BENCHTIME" .)
-  cd "$TMP/$1/src/$MODULE/benchmark"
-  go test "${args[@]}" | tee -a "$RESULTS/$1.go.txt"
-  GOPATH="$TMP/$1" yaegi test "${args[@]}" | tee -a "$RESULTS/$1.yaegi.txt"
-}
+echo "# k6: load.js" >&2
+(cd "$ROOT" && docker compose run --rm -T k6 run --quiet /benchmark/load.js) >"$TMP/k6.json"
 
-benchstat() {
-  go run golang.org/x/perf/cmd/benchstat@latest "$@"
-}
-
-versions=(head)
-stage head
-if [[ -n "$BASE" ]]; then
-  versions=(base head)
-  stage base "$BASE"
-fi
-
-mkdir -p "$RESULTS"
-rm -f "$RESULTS"/*.txt
-
-# Versions alternate within a round: a slow moment of the machine hits them all.
-for round in $(seq "$COUNT"); do
-  for version in "${versions[@]}"; do
-    echo "# Round $round/$COUNT: $version"
-    run "$version"
-  done
-done
-
-cd "$RESULTS"
 {
-  if [[ -n "$BASE" ]]; then
-    echo "# Compiled: $BASE vs working tree"
-    benchstat base=base.go.txt head=head.go.txt
-    echo
-    echo "# Yaegi: $BASE vs working tree"
-    benchstat base=base.yaegi.txt head=head.yaegi.txt
-  else
-    echo "# Working tree: compiled vs Yaegi"
-    # Yaegi prints no "pkg:" line: without -ignore, the two would not be compared.
-    benchstat -ignore pkg compiled=head.go.txt yaegi=head.yaegi.txt
-  fi
-} | tee report.txt
+  echo '{'
+  echo '  "yaegi": {'
+  # BenchmarkHit/1KB-12  1461  231135 ns/op  4224 B/op  51 allocs/op
+  awk '/^Benchmark/ {
+    name = $1
+    sub(/^Benchmark/, "", name)
+    sub(/-[0-9]+$/, "", name)
+    printf "%s    \"%s\": { \"ns_per_op\": %s, \"bytes_per_op\": %s, \"allocs_per_op\": %s }", sep, name, $3, $5, $7
+    sep = ",\n"
+  } END { print "" }' <(sort "$TMP/yaegi.txt") # Yaegi runs them in random order
+  echo '  },'
+  printf '  "k6": '
+  sed '1!s/^/  /' "$TMP/k6.json"
+  echo '}'
+} >"$RESULTS"
+cat "$RESULTS"

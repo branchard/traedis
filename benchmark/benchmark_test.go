@@ -1,7 +1,5 @@
-// Package benchmark measures the plugin the way Traefik uses it: through New and
-// the handler it returns, against a real Redis (TRAEDIS_REDIS_DSN). Nothing here
-// depends on the plugin's internals, so bench.sh can run these benchmarks against
-// any version of pkg/ and compare the results.
+// Package benchmark measures the plugin the way Traefik uses it: through New and the handler it returns,
+// against a real Redis (TRAEDIS_REDIS_DSN). bench.sh runs it under Yaegi.
 package benchmark
 
 import (
