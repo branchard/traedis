@@ -1,18 +1,25 @@
 # yaml-language-server: $schema=https://json.schemastore.org/traefik-v3-file-provider.json
 http:
   routers:
-    placeholder:
-      rule: PathPrefix(`/`)
+    placeholder-cache:
+      rule: PathPrefix(`/placeholder-cache`)
       middlewares:
-        - ratelimit # before the cache: random URLs are misses that reach the backend
-        - cache
+        - cache # before the prefix is stripped: the cache key is the public URL
+        - placeholder-prefix
+      service: placeholder
+    placeholder:
+      rule: PathPrefix(`/placeholder`)
+      middlewares:
+        - placeholder-prefix
       service: placeholder
 
   middlewares:
-    ratelimit:
-      rateLimit:
-        average: 50 # requests per second per client IP
-        burst: 100
+    # The backend serves /<width>x<height>
+    placeholder-prefix:
+      stripPrefix:
+        prefixes:
+          - /placeholder-cache
+          - /placeholder
 
   services:
     placeholder:
