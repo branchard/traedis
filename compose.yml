@@ -46,11 +46,12 @@ services:
       timeout: 2s
       retries: 15
 
-  # Backend without Cache-Control: exercises `defaultTtl` → http://localhost:8080/whoami
+  # Backend without Cache-Control: exercises `defaultTtl` → http://localhost:8080/whoami-cache (/whoami: without the cache)
   whoami:
     image: traefik/whoami:latest
 
-  # Image backend sending `Cache-Control: max-age`: exercises explicit freshness → http://localhost:8080/600x400
+  # Image backend sending `Cache-Control: max-age`: exercises explicit freshness → http://localhost:8080/placeholder-cache/600x400
+  # (/placeholder/600x400: without the cache)
   placeholder:
     image: ghcr.io/open-placeholder/open-placeholder:sha-8a81d5c
 
