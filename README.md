@@ -120,7 +120,7 @@ make stop   # stop the stack (`make clean` also removes the volumes)
 make help   # list all targets
 ```
 
-Once started, Traefik listens on <http://localhost:8080>: try `curl -i http://localhost:8080/600x400` twice and watch the `Cache-Status` header.
+Once started, Traefik listens on <http://localhost:8080>: try `curl -i http://localhost:8080/placeholder-cache/600x400` twice and watch the `Cache-Status` header (`/placeholder/600x400` is the same backend without the cache).
 
 ## License
 
