@@ -120,7 +120,8 @@
 <body>
 <main>
   <h1>Traedis benchmarks</h1>
-  <p id="status">Loading results.json…</p>
+  <!-- Replaced by the script; stays when the page is opened as file://, where modules do not load. -->
+  <p id="status">Nothing to show: run <code>make bench-view</code> and open http://localhost:8082/visualizer.html.</p>
   <div id="report" hidden>
     <h2>Load test through Traefik</h2>
     <p id="load-note"></p>
@@ -129,37 +130,18 @@
     </div>
 
     <h2>Handler under Yaegi</h2>
-    <p>The middleware called in-process, against a real Redis: cost of one request.</p>
+    <p id="yaegi-note"></p>
     <div class="scroll">
       <table id="yaegi"></table>
     </div>
   </div>
 </main>
 
-<script>
-  const CASES = { direct: 'Without cache', hit: 'Cache hit', miss: 'Cache miss' };
-
-  function number(value, digits) {
-    return value.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
-  }
-
-  function milliseconds(ms) {
-    return number(ms, ms < 10 ? 2 : ms < 100 ? 1 : 0) + ' ms';
-  }
-
-  function duration(ns) {
-    if (ns < 1e6) {
-      return number(ns / 1e3, ns < 1e5 ? 1 : 0) + ' µs';
-    }
-    return milliseconds(ns / 1e6);
-  }
-
-  function bytes(n) {
-    if (n < 1 << 20) {
-      return number(n / 1024, n < 100 << 10 ? 1 : 0) + ' KiB';
-    }
-    return number(n / (1 << 20), 2) + ' MiB';
-  }
+<script type="module">
+  import {
+    CASES, LOAD_COLUMNS, YAEGI_COLUMNS, YAEGI_NOTE,
+    backends, bytes, duration, gain, loadNote, milliseconds, number, rate, warning,
+  } from './report.js';
 
   // cell appends a cell to row; content is text or a node, never HTML.
   function cell(row, content, className, tag) {
@@ -181,13 +163,11 @@
   }
 
   function renderLoad(table, k6) {
-    const backends = Object.keys(k6).filter((key) => typeof k6[key] === 'object');
-    const fastest = Math.max(...backends.flatMap((b) => Object.values(k6[b]).map((c) => c.requests_per_second)));
-    const body = head(table, [
-      ['Backend'], ['Case'], ['URL'], ['Requests/s', 'num'], ['p50', 'num'], ['p95', 'num'], ['vs without cache', 'num'],
-    ]);
+    const names = backends(k6);
+    const fastest = Math.max(...names.flatMap((b) => Object.values(k6[b]).map((c) => c.requests_per_second)));
+    const body = head(table, LOAD_COLUMNS);
 
-    for (const backend of backends) {
+    for (const backend of names) {
       const cases = Object.entries(k6[backend]);
       cases.forEach(([name, result], i) => {
         const row = body.insertRow();
@@ -201,34 +181,29 @@
         url.textContent = result.url || '';
         cell(row, url, 'muted');
 
-        const rate = cell(row, number(result.requests_per_second, result.requests_per_second < 100 ? 1 : 0), 'num');
+        const requests = cell(row, rate(result.requests_per_second), 'num');
         const bar = document.createElement('div');
         bar.className = 'bar';
         bar.style.width = (100 * result.requests_per_second / fastest) + '%';
-        rate.append(bar);
+        requests.append(bar);
 
         cell(row, milliseconds(result.p50_ms), 'num');
         cell(row, milliseconds(result.p95_ms), 'num');
 
-        const gain = result.throughput_vs_direct;
-        const versus = cell(row, gain === undefined ? '—' : '×' + number(gain, gain < 10 ? 2 : 1), 'num gain');
-        if (result.expected_responses < 1) {
-          const warning = document.createElement('div');
-          warning.className = 'muted';
-          warning.textContent = '⚠ ' + number(100 * result.expected_responses, 0) + '% expected responses';
-          versus.append(warning);
+        const versus = cell(row, gain(result.throughput_vs_direct), 'num gain');
+        if (warning(result)) {
+          const alert = document.createElement('div');
+          alert.className = 'muted';
+          alert.textContent = warning(result);
+          versus.append(alert);
         }
       });
     }
-
-    document.getElementById('load-note').textContent =
-      `k6, ${k6.vus} virtual users for ${k6.seconds} s per case. ` +
-      'Each backend is requested on its route without the cache, then on the cached route: ' +
-      'one stored URL (hit), and a new URL for every request (miss).';
+    document.getElementById('load-note').textContent = loadNote(k6);
   }
 
   function renderYaegi(table, yaegi) {
-    const body = head(table, [['Benchmark'], ['Time per request', 'num'], ['Memory per request', 'num'], ['Allocations per request', 'num']]);
+    const body = head(table, YAEGI_COLUMNS);
     for (const [name, result] of Object.entries(yaegi)) {
       const row = body.insertRow();
       const label = document.createElement('code');
@@ -238,6 +213,7 @@
       cell(row, bytes(result.bytes_per_op), 'num');
       cell(row, number(result.allocs_per_op, 0), 'num');
     }
+    document.getElementById('yaegi-note').textContent = YAEGI_NOTE;
   }
 
   async function main() {
@@ -255,9 +231,7 @@
       status.textContent = modified ? 'Results of ' + new Date(modified).toLocaleString() + '.' : '';
       document.getElementById('report').hidden = false;
     } catch (error) {
-      status.textContent = location.protocol === 'file:'
-        ? 'This page cannot read results.json when opened as a file: run `make bench-view` and open http://localhost:8082/visualizer.html.'
-        : 'Cannot read results.json (' + error.message + '): run `make bench` first.';
+      status.textContent = 'Cannot read results.json (' + error.message + '): run `make bench` first.';
     }
   }
 
