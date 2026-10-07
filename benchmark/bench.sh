@@ -48,7 +48,7 @@ echo "# k6: load.js" >&2
     sub(/-[0-9]+$/, "", name)
     printf "%s    \"%s\": { \"ns_per_op\": %s, \"bytes_per_op\": %s, \"allocs_per_op\": %s }", sep, name, $3, $5, $7
     sep = ",\n"
-  } END { print "" }' <(sort "$TMP/yaegi.txt") # Yaegi runs them in random order
+  } END { print "" }' <(LC_ALL=C sort -t/ -k1,1 -k2,2h "$TMP/yaegi.txt") # Yaegi runs them in random order: by name, then by size (1KB, 100KB, 1MB)
   echo '  },'
   printf '  "k6": '
   sed '1!s/^/  /' "$TMP/k6.json"
