@@ -6,7 +6,7 @@
 #     cache (direct) and with it (hit, miss).
 #
 #   docker compose up -d --wait ingress cache whoami placeholder
-#   ./benchmark/bench.sh
+#   ./benchmark/run.sh
 #
 # BENCH (.) and BENCHTIME (2s) are passed to -bench and -benchtime; LOAD_VUS (10)
 # and LOAD_SECONDS (10) are the concurrency and the duration of each k6 case.

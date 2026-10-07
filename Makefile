@@ -35,7 +35,7 @@ e2e: stop ## Run end-to-end tests (Hurl through Traefik)
 bench: stop ## Run benchmarks (under Yaegi, then k6 through Traefik) into benchmark/results.json
 	docker compose up -d --wait --wait-timeout 120 ingress cache whoami placeholder
 	@# Always stop the containers, even when a benchmark fails
-	./benchmark/bench.sh; status=$$?; docker compose down; exit $$status
+	./benchmark/run.sh; status=$$?; docker compose down; exit $$status
 
 bench-view: ## Show benchmark/results.json as tables → http://localhost:8082/visualizer.html (Ctrl-C to stop)
 	@echo "http://localhost:8082/visualizer.html"

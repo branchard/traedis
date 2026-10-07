@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/compose-spec/compose-spec/master/schema/compose-spec.json
 # Tools for benchmarking
 services:
-  # Load generator of benchmark/bench.sh: never started by `docker compose up`, only by `docker compose run k6`
+  # Load generator of benchmark/run.sh: never started by `docker compose up`, only by `docker compose run k6`
   k6:
     image: grafana/k6:2.3.0
     profiles: [ bench ]

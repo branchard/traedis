@@ -62,7 +62,7 @@ jobs:
           go-version: "1.26"
       - run: go install github.com/traefik/yaegi/cmd/yaegi@v0.16.1
       - run: docker compose up -d --wait --wait-timeout 120 ingress cache whoami placeholder
-      - run: ./benchmark/bench.sh
+      - run: ./benchmark/run.sh
       # Not on failure: results.json would still be the committed one, not this run's
       - name: Report
         run: node benchmark/summary.mjs >> "$GITHUB_STEP_SUMMARY"

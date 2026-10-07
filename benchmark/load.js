@@ -1,4 +1,4 @@
-// Load test through Traefik, run by bench.sh with the k6 service of compose.yml.
+// Load test through Traefik, run by run.sh with the k6 service of compose.yml.
 // For each sample backend, three cases run one after the other:
 //   direct: the route without the cache middleware (the reference);
 //   hit:    the cached route, one URL already stored;
