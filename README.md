@@ -117,9 +117,6 @@ Requires Docker (with Compose), Go and the [Yaegi](https://github.com/traefik/ya
 ```bash
 make start  # start the local stack; Traefik restarts whenever the plugin code changes
 make stop   # stop the stack (`make clean` also removes the volumes)
-make unit   # go vet, then unit and Redis integration tests, compiled and under Yaegi
-make e2e    # end-to-end tests, through Traefik
-make bench  # benchmarks, compiled and under Yaegi; `make bench BASE=main` compares with another version
 make help   # list all targets
 ```
 
