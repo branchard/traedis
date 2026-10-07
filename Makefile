@@ -1,6 +1,6 @@
 # @see: https://stackoverflow.com/a/70550568
 MAKEFLAGS += --no-print-directory
-.PHONY: help start stop clean unwatch unit e2e bench
+.PHONY: help start stop clean unwatch unit e2e bench bench-view
 
 ##@ Global
 help: ## Show this help
@@ -32,8 +32,11 @@ e2e: stop ## Run end-to-end tests
 	@# Always stop the containers, even when a test fails
 	./e2e.sh; status=$$?; docker compose down; exit $$status
 
-bench: export TRAEDIS_REDIS_DSN = redis://localhost:6379/15
-bench: stop ## Run benchmarks, compiled and under Yaegi (BASE=<git ref> to compare with that version)
-	docker compose up -d --wait --wait-timeout 120 cache
+bench: stop ## Run benchmarks (under Yaegi, then k6 through Traefik) into benchmark/results.json
+	docker compose up -d --wait --wait-timeout 120 ingress cache whoami placeholder
 	@# Always stop the containers, even when a benchmark fails
-	./benchmark/bench.sh $(BASE); status=$$?; docker compose down; exit $$status
+	./benchmark/bench.sh; status=$$?; docker compose down; exit $$status
+
+bench-view: ## Show benchmark/results.json as tables → http://localhost:8082/visualizer.html (Ctrl-C to stop)
+	@echo "http://localhost:8082/visualizer.html"
+	-docker compose run --rm --service-ports visualizer
