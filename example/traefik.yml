@@ -4,11 +4,6 @@ log:
 
 accessLog: {}
 
-tracing:
-  otlp:
-    grpc:
-      endpoint: "tracer:4317"
-
 api:
   dashboard: true
   insecure: true

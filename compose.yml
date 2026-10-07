@@ -69,25 +69,6 @@ services:
     volumes:
       - insight:/data
 
-  # Trace viewer receiving Traefik's OTLP traces, to check that the plugin keeps trace propagation intact
-  tracer:
-    image: ghcr.io/branchard/onetrace:2
-    ports:
-      - "14318:14318" # UI → http://localhost:14318
-      - "14317:4317"  # OTLP gRPC, from the host
-    environment:
-      SECRET: 8a922E7b6f64_c1c6dafc022Z63b26a1410
-      SITE_URL: http://localhost:14318
-      ADMIN_EMAIL: admin@traedis.local
-      ADMIN_PASSWORD: admin
-      ADMIN_TOKEN: change-me-in-production
-      ORG_NAME: Traedis
-      PROJECT_NAME: Traedis
-      PROJECT_TOKEN: change-me-in-production
-    volumes:
-      - tracer:/volumes
-
 volumes:
   http-cache:
   insight:
-  tracer:
