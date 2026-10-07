@@ -38,15 +38,15 @@ check() { # check <description> <actual> <expected substring>
 
 echo "# Waiting for $BASE_URL"
 for _ in $(seq 1 60); do
-  if curl -sf --max-time 5 -o /dev/null "$BASE_URL/whoami?ready=$RUN" &&
-    curl -sf --max-time 5 -o /dev/null "$BASE_URL/600x600?ready=$RUN"; then
+  if curl -sf --max-time 5 -o /dev/null "$BASE_URL/whoami-cache?ready=$RUN" &&
+    curl -sf --max-time 5 -o /dev/null "$BASE_URL/placeholder-cache/600x600?ready=$RUN"; then
     break
   fi
   sleep 1
 done
 
 echo "# Miss, then hit (explicit freshness: placeholder sends max-age)"
-url="$BASE_URL/600x600?b=2&a=1&run=$RUN"
+url="$BASE_URL/placeholder-cache/600x600?b=2&a=1&run=$RUN"
 request miss "$url"
 check "first request is a miss" "$(header miss Cache-Status)" "traedis; fwd=uri-miss; fwd-status=200"
 request hit "$url"
@@ -67,14 +67,14 @@ else
 fi
 
 echo "# Key normalization and HEAD"
-request sorted "$BASE_URL/600x600?a=1&b=2&run=$RUN"
+request sorted "$BASE_URL/placeholder-cache/600x600?a=1&b=2&run=$RUN"
 check "query parameter order is ignored" "$(header sorted Cache-Status)" "traedis; hit"
 request head -I "$url"
 check "HEAD is served from the stored GET" "$(header head Cache-Status)" "traedis; hit"
 check "HEAD has Content-Length" "$(header head Content-Length)" "$(wc -c <"$TMP/miss.body" | tr -d ' ')"
 
 echo "# defaultTtl (whoami sends no Cache-Control)"
-url="$BASE_URL/whoami?run=$RUN"
+url="$BASE_URL/whoami-cache?run=$RUN"
 request whoami1 "$url"
 check "first request is a miss" "$(header whoami1 Cache-Status)" "traedis; fwd=uri-miss; fwd-status=200"
 request whoami2 "$url"
@@ -89,24 +89,24 @@ request sse -H "Accept: text/event-stream" "$url"
 check "event streams are not handled" "$(header sse Cache-Status)" "traedis; fwd=bypass"
 
 echo "# Nothing personal is shared"
-url="$BASE_URL/whoami?auth=$RUN"
+url="$BASE_URL/whoami-cache?auth=$RUN"
 request auth1 -H "Authorization: Bearer secret" "$url"
 request auth2 -H "Authorization: Bearer secret" "$url"
 check "Authorization without explicit freshness is not stored" "$(header auth2 Cache-Status)" "traedis; fwd=uri-miss"
-url="$BASE_URL/whoami?cookie=$RUN"
+url="$BASE_URL/whoami-cache?cookie=$RUN"
 request cookie1 -H "Cookie: sid=1" "$url"
 request cookie2 -H "Cookie: sid=1" "$url"
 check "Cookie without explicit freshness is not stored" "$(header cookie2 Cache-Status)" "traedis; fwd=uri-miss"
 
 echo "# Fail open when Redis is down"
 docker compose stop cache >/dev/null 2>&1
-request down "$BASE_URL/600x600?b=2&a=1&run=$RUN"
+request down "$BASE_URL/placeholder-cache/600x600?b=2&a=1&run=$RUN"
 check "backend still answers" "$(status down)" "200"
 check "cache is bypassed" "$(header down Cache-Status)" "traedis; fwd=bypass; fwd-status=200; detail=redis"
 docker compose up -d --wait cache >/dev/null 2>&1
 
 echo "# Cache works again once Redis is back"
-url="$BASE_URL/whoami?back=$RUN"
+url="$BASE_URL/whoami-cache?back=$RUN"
 for _ in $(seq 1 10); do
   request back "$url"
   if [[ "$(header back Cache-Status)" == *"hit"* ]]; then
