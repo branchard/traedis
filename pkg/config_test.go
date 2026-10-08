@@ -22,6 +22,9 @@ func TestCreateConfigDefaults(t *testing.T) {
 	if s.defaultTTL != 5*time.Minute || s.staleTTL != time.Hour {
 		t.Errorf("defaultTTL = %v, staleTTL = %v", s.defaultTTL, s.staleTTL)
 	}
+	if s.defaultStaleWhileRevalidate != 0 || s.defaultStaleIfError != 0 {
+		t.Errorf("§4.2.4 no stale response unless the backend or the configuration allows it: %v, %v", s.defaultStaleWhileRevalidate, s.defaultStaleIfError)
+	}
 	if s.maxBodyBytes != 5242880 || s.exposeKey {
 		t.Errorf("settings = %+v", s)
 	}
@@ -38,6 +41,8 @@ func TestParseConfig(t *testing.T) {
 		{name: "zero redis.timeout", mutate: func(c *Config) { c.Redis.Timeout = "0" }, wantErr: "redis.timeout"},
 		{name: "invalid defaultTtl", mutate: func(c *Config) { c.DefaultTTL = "5 minutes" }, wantErr: "defaultTtl"},
 		{name: "negative staleTtl", mutate: func(c *Config) { c.StaleTTL = "-1s" }, wantErr: "staleTtl"},
+		{name: "invalid defaultStaleWhileRevalidate", mutate: func(c *Config) { c.DefaultStaleWhileRevalidate = "30" }, wantErr: "defaultStaleWhileRevalidate"},
+		{name: "negative defaultStaleIfError", mutate: func(c *Config) { c.DefaultStaleIfError = "-1s" }, wantErr: "defaultStaleIfError"},
 		{
 			name:   "defaultTtl 0 disables heuristic freshness",
 			mutate: func(c *Config) { c.DefaultTTL = "0" },
@@ -121,6 +126,8 @@ func TestNewWithTestDataWithoutRedis(t *testing.T) {
 	cfg.StatusCodes = []int{200}
 	cfg.DefaultTTL = "5m"
 	cfg.StaleTTL = "1h"
+	cfg.DefaultStaleWhileRevalidate = "0s"
+	cfg.DefaultStaleIfError = "0s"
 	cfg.MaxBodyBytes = 5242880
 	cfg.ExposeKey = false
 

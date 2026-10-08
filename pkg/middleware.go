@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,9 @@ type cache struct {
 	cfg      settings
 	store    store
 	maxEntry int64
+
+	revalMu      sync.Mutex
+	revalidating map[string]bool // keys being revalidated, at most maxRevalidations
 }
 
 // New creates the middleware. It never contacts Redis: Traefik must start even
@@ -35,7 +39,10 @@ func New(_ context.Context, next http.Handler, config *Config, name string) (htt
 }
 
 func newCache(next http.Handler, name string, cfg settings, s store) *cache {
-	return &cache{next: next, name: name, cfg: cfg, store: s, maxEntry: cfg.maxBodyBytes + entryOverhead}
+	return &cache{
+		next: next, name: name, cfg: cfg, store: s, maxEntry: cfg.maxBodyBytes + entryOverhead,
+		revalidating: map[string]bool{},
+	}
 }
 
 func (c *cache) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -57,7 +64,7 @@ func (c *cache) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if !lookupAllowed(r) {
 		status.fwd = "request"
-		c.forward(w, r, key, reqCC, status, true)
+		c.forward(w, r, key, reqCC, status, true, nil)
 		return
 	}
 
@@ -66,22 +73,33 @@ func (c *cache) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Fail open; don't try to write to a failing Redis.
 		status.fwd = "bypass"
 		status.detail = "redis"
-		c.forward(w, r, key, reqCC, status, false)
+		c.forward(w, r, key, reqCC, status, false, nil)
 		return
 	}
 	status.fwd = "uri-miss"
+	var stored *entry
 	if err == nil {
 		if e, err := decodeEntry(raw, c.maxEntry); err == nil {
+			cc := parseCacheControl(e.header.Values("Cache-Control"))
 			age := currentAge(e.header, e.requestTime, e.responseTime, time.Now())
-			lifetime := freshnessLifetime(e, c.cfg.defaultTTL)
+			lifetime := freshnessLifetime(e, cc, c.cfg.defaultTTL)
 			if servable(reqCC, age, lifetime) {
+				status.hit = true
+				c.serve(w, r, e, age, lifetime, status)
+				return
+			}
+			if servableWhileRevalidating(reqCC, cc, age-lifetime, c.cfg) {
+				c.revalidate(r, key)
+				status.hit = true
+				status.detail = "stale-while-revalidate"
 				c.serve(w, r, e, age, lifetime, status)
 				return
 			}
 			status.fwd = "stale"
+			stored = e
 		}
 	}
-	c.forward(w, r, key, reqCC, status, true)
+	c.forward(w, r, key, reqCC, status, true, stored)
 }
 
 // passThrough proxies a request the cache never handles, without wrapping the
@@ -106,7 +124,7 @@ func expectsStream(r *http.Request) bool {
 	return false
 }
 
-// serve answers from a stored entry (§4).
+// serve answers from a stored entry (§4), fresh or stale.
 func (c *cache) serve(w http.ResponseWriter, r *http.Request, e *entry, age, lifetime time.Duration, status cacheStatus) {
 	h := w.Header()
 	for name, values := range e.header {
@@ -116,7 +134,6 @@ func (c *cache) serve(w http.ResponseWriter, r *http.Request, e *entry, age, lif
 	if bodyAllowed(e.status) {
 		h.Set("Content-Length", strconv.Itoa(len(e.body)))
 	}
-	status.hit = true
 	status.ttl = lifetime - age
 	h.Add("Cache-Status", status.String())
 	w.WriteHeader(e.status)
@@ -129,8 +146,10 @@ func bodyAllowed(status int) bool {
 	return status >= 200 && status != http.StatusNoContent && status != http.StatusNotModified
 }
 
-// forward proxies the request to the backend and stores the response when allowed.
-func (c *cache) forward(w http.ResponseWriter, r *http.Request, key string, reqCC cacheControl, status cacheStatus, mayStore bool) {
+// forward proxies the request to the backend and stores the response when
+// allowed. stored is the entry that could not be served, if any: it answers in
+// place of a backend error when stale-if-error allows it (RFC 5861 §4).
+func (c *cache) forward(w http.ResponseWriter, r *http.Request, key string, reqCC cacheControl, status cacheStatus, mayStore bool, stored *entry) {
 	if reqCC.onlyIfCached {
 		// §5.2.1.7: no stored response may be used.
 		w.Header().Add("Cache-Status", status.String())
@@ -138,7 +157,12 @@ func (c *cache) forward(w http.ResponseWriter, r *http.Request, key string, reqC
 		return
 	}
 
-	m := &missHook{c: c, req: r, status: status, store: mayStore && r.Method == http.MethodGet, requestTime: time.Now()}
+	m := &missHook{c: c, req: r, status: status, store: mayStore && r.Method == http.MethodGet, requestTime: time.Now(), stored: stored}
+	var before http.Header
+	if stored != nil {
+		// What the header holds now, without what the backend will add to it.
+		before = w.Header().Clone()
+	}
 	rec := newRecorder(w, m, c.cfg.maxBodyBytes)
 	// The original request goes to the backend: context and trace headers intact.
 	c.next.ServeHTTP(rec, r)
@@ -146,9 +170,30 @@ func (c *cache) forward(w http.ResponseWriter, r *http.Request, key string, reqC
 		rec.WriteHeader(http.StatusOK)
 	}
 
+	if m.staleIfError {
+		// Nothing of the backend's error was sent: the stored response replaces it.
+		h := w.Header()
+		for name := range h {
+			delete(h, name)
+		}
+		for name, values := range before {
+			h[name] = values
+		}
+		status.fwdStatus = rec.status
+		status.served = true
+		status.detail = "stale-if-error"
+		c.serve(w, r, stored, m.age, m.lifetime, status)
+		return
+	}
+	c.save(context.WithoutCancel(r.Context()), rec, m, key)
+}
+
+// save stores the recorded response when the hook allowed it and its body was
+// fully captured. It reports whether the response was sent to the store.
+func (c *cache) save(ctx context.Context, rec *recorder, m *missHook, key string) bool {
 	body, complete := rec.body()
 	if !complete || !m.store {
-		return
+		return false
 	}
 	data := encodeEntry(&entry{
 		status:       rec.status,
@@ -159,15 +204,16 @@ func (c *cache) forward(w http.ResponseWriter, r *http.Request, key string, reqC
 		vary:         http.Header{},
 	})
 	if int64(len(data)) > c.maxEntry {
-		return
+		return false
 	}
 	// The client gets the whole response before the Redis write.
 	rec.Flush()
-	_ = c.store.set(context.WithoutCancel(r.Context()), key, "", data, m.ttl)
+	_ = c.store.set(ctx, key, "", data, m.ttl)
+	return true
 }
 
-// missHook decides, when the backend sends its final status, whether the
-// response is stored, and adds Cache-Status.
+// missHook decides, when the backend sends its final status, what becomes of
+// the response (sent, stored, replaced by a stale entry), and adds Cache-Status.
 type missHook struct {
 	c            *cache
 	req          *http.Request
@@ -177,10 +223,31 @@ type missHook struct {
 	responseTime time.Time
 	header       http.Header // header to store, without our Cache-Status
 	ttl          time.Duration
+
+	// stale-if-error: the entry that may replace a backend error and, once
+	// staleIfError is set, its age and freshness lifetime.
+	stored       *entry
+	staleIfError bool
+	age          time.Duration
+	lifetime     time.Duration
+
+	// Background revalidation: superseded is set when the entry must not
+	// outlive a response that ends up not being stored.
+	revalidation bool
+	superseded   bool
 }
 
-func (m *missHook) beforeHeader(code int, h http.Header) bool {
+func (m *missHook) beforeHeader(code int, h http.Header) disposition {
 	m.responseTime = time.Now()
+	if m.stored != nil && staleIfErrorStatus(code) {
+		cc := parseCacheControl(m.stored.header.Values("Cache-Control"))
+		m.age = currentAge(m.stored.header, m.stored.requestTime, m.stored.responseTime, m.responseTime)
+		m.lifetime = freshnessLifetime(m.stored, cc, m.c.cfg.defaultTTL)
+		if servableOnError(code, cc, m.age-m.lifetime, m.c.cfg) {
+			m.staleIfError = true
+			return withhold
+		}
+	}
 	if m.store {
 		ttl, ok := storeTTL(m.req, code, h, m.c.cfg, m.requestTime, m.responseTime)
 		m.store = ok
@@ -189,7 +256,14 @@ func (m *missHook) beforeHeader(code int, h http.Header) bool {
 			m.header = headerToStore(h)
 		}
 	}
+	if m.revalidation {
+		// A storable response whose body turns out to be too large supersedes too.
+		m.superseded = m.store || supersedes(code, h, m.c.cfg, m.requestTime, m.responseTime)
+	}
 	m.status.fwdStatus = code
 	h.Add("Cache-Status", m.status.String())
-	return m.store
+	if m.store {
+		return keepCopy
+	}
+	return passOn
 }

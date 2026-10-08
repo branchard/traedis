@@ -12,6 +12,7 @@ type memStore struct {
 	data map[string]map[string]memValue
 	err  error // returned by every call when set
 	sets int
+	dels int
 }
 
 type memValue struct {
@@ -47,6 +48,17 @@ func (m *memStore) set(_ context.Context, key, field string, value []byte, ttl t
 	}
 	m.data[key][field] = memValue{value: append([]byte(nil), value...), ttl: ttl}
 	m.sets++
+	return nil
+}
+
+func (m *memStore) del(_ context.Context, key, field string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return m.err
+	}
+	delete(m.data[key], field)
+	m.dels++
 	return nil
 }
 

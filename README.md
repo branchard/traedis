@@ -19,7 +19,7 @@
 
 > [!NOTE]
 > Traedis is at an early stage. `GET`/`HEAD` caching with RFC 9111 freshness works end to end.
-> Not implemented yet: `Vary`, serving stale responses, revalidation and invalidation.
+> Not implemented yet: `Vary`, revalidation with `ETag` / `Last-Modified`, `max-stale`, and invalidation.
 > Until then, responses with a `Vary` header are not cached.
 
 ## Requirements
@@ -78,15 +78,17 @@ and [`example/`](example).
 
 All keys are optional.
 
-| Key             | Default                | Description                                                                                                                                  |
-|-----------------|------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
-| `redis.dsn`     | `redis://cache:6379/0` | Redis connection string: `redis://[user[:password]@]host[:port][/db]`. TLS (`rediss://`) is not supported yet.                               |
-| `redis.timeout` | `50ms`                 | Maximum time for a Redis operation. Past it, the cache is bypassed.                                                                          |
-| `statusCodes`   | `[200]`                | Status codes allowed to be stored. It only narrows what RFC 9111 allows; it never makes a response cacheable.                                |
-| `defaultTtl`    | `5m`                   | Freshness when the backend sends no `max-age`, `s-maxage` or `Expires`. `0` disables it. Never applied to requests with `Authorization` or `Cookie`, nor to responses with `Set-Cookie`. |
-| `staleTtl`      | `1h`                   | How long an entry is kept in Redis after it expires. Serving stale responses is not implemented yet.                                         |
-| `maxBodyBytes`  | `5242880` (5 MiB)      | Larger responses are streamed to the client and not cached.                                                                                  |
-| `exposeKey`     | `false`                | Add the cache key to the `Cache-Status` header (`key="…"`).                                                                                  |
+| Key                           | Default                | Description                                                                                                                                                |
+|-------------------------------|------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `redis.dsn`                   | `redis://cache:6379/0` | Redis connection string: `redis://[user[:password]@]host[:port][/db]`. TLS (`rediss://`) is not supported yet.                                             |
+| `redis.timeout`               | `50ms`                 | Maximum time for a Redis operation. Past it, the cache is bypassed.                                                                                        |
+| `statusCodes`                 | `[200]`                | Status codes allowed to be stored. It only narrows what RFC 9111 allows; it never makes a response cacheable.                                              |
+| `defaultTtl`                  | `5m`                   | Freshness when the backend sends no `max-age`, `s-maxage` or `Expires`. `0` disables it.                                                                   |
+| `staleTtl`                    | `1h`                   | How long an entry is kept in Redis after it expires, hence the upper bound of `stale-while-revalidate` and `stale-if-error`. `0` disables stale responses. |
+| `defaultStaleWhileRevalidate` | `0s`                   | `stale-while-revalidate` window for responses that don't send the directive. `0` disables it. See [Stale responses](#stale-responses).                     |
+| `defaultStaleIfError`         | `0s`                   | `stale-if-error` window for responses that don't send the directive. `0` disables it.                                                                      |
+| `maxBodyBytes`                | `5242880` (5 MiB)      | Larger responses are streamed to the client and not cached.                                                                                                |
+| `exposeKey`                   | `false`                | Add the cache key to the `Cache-Status` header (`key="…"`).                                                                                                |
 
 Durations use the [Go syntax](https://pkg.go.dev/time#ParseDuration) (`50ms`, `5m`, `1h`).
 

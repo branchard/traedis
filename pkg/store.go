@@ -15,4 +15,6 @@ type store interface {
 	get(ctx context.Context, key, field string) ([]byte, error)
 	// set stores value in field of key, expiring after ttl.
 	set(ctx context.Context, key, field string, value []byte, ttl time.Duration) error
+	// del removes field from key.
+	del(ctx context.Context, key, field string) error
 }

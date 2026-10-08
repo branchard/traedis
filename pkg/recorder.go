@@ -8,15 +8,26 @@ import (
 	"strconv"
 )
 
+// disposition is what a headerHook wants done with a response.
+type disposition int
+
+const (
+	passOn   disposition = iota // send it downstream
+	keepCopy                    // send it downstream and keep a copy of the body
+	withhold                    // send nothing downstream: the caller answers instead
+)
+
 // headerHook is told about the final status before it is sent downstream.
 type headerHook interface {
-	// beforeHeader may edit h and returns whether to keep a copy of the body.
-	beforeHeader(status int, h http.Header) bool
+	// beforeHeader may edit h and tells what to do with the response.
+	beforeHeader(status int, h http.Header) disposition
 }
 
 // recorder streams a response to the client while keeping a copy of at most max
 // body bytes. It never alters the stream: past max, it stops buffering. It
 // preserves http.Flusher, http.Hijacker and trailers (Header is the underlying map).
+// A withheld response is dropped instead: nothing of it is sent, but what the
+// backend put in the header stays there.
 type recorder struct {
 	rw          http.ResponseWriter
 	hook        headerHook
@@ -24,6 +35,7 @@ type recorder struct {
 	status      int
 	wroteHeader bool
 	capture     bool
+	withheld    bool
 	hijacked    bool
 	buf         bytes.Buffer
 }
@@ -47,7 +59,13 @@ func (r *recorder) WriteHeader(code int) {
 	}
 	r.wroteHeader = true
 	r.status = code
-	r.capture = r.hook.beforeHeader(code, r.rw.Header())
+	switch r.hook.beforeHeader(code, r.rw.Header()) {
+	case withhold:
+		r.withheld = true
+		return
+	case keepCopy:
+		r.capture = true
+	}
 	if cl := r.rw.Header().Get("Content-Length"); r.capture && cl != "" {
 		if n, err := strconv.ParseInt(cl, 10, 64); err != nil || n > r.max {
 			r.capture = false
@@ -59,6 +77,9 @@ func (r *recorder) WriteHeader(code int) {
 func (r *recorder) Write(p []byte) (int, error) {
 	if !r.wroteHeader {
 		r.WriteHeader(http.StatusOK)
+	}
+	if r.withheld {
+		return len(p), nil
 	}
 	n, err := r.rw.Write(p)
 	if r.capture {
@@ -82,6 +103,9 @@ func (r *recorder) stopCapture() {
 func (r *recorder) Flush() {
 	if !r.wroteHeader {
 		r.WriteHeader(http.StatusOK)
+	}
+	if r.withheld {
+		return
 	}
 	if f, ok := r.rw.(http.Flusher); ok {
 		f.Flush()

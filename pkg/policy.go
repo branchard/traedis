@@ -13,22 +13,27 @@ const maxDeltaSeconds = 2147483648
 // cacheControl holds the Cache-Control directives the cache acts upon.
 // Delta-seconds fields are -1 when absent.
 type cacheControl struct {
-	noStore        bool
-	noCache        bool // the qualified form is treated as unqualified (§5.2.2.4)
-	private        bool // the qualified form is treated as unqualified (§5.2.2.7)
-	public         bool
-	mustRevalidate bool
-	onlyIfCached   bool
-	maxAge         int64
-	sMaxAge        int64
-	minFresh       int64
+	noStore         bool
+	noCache         bool // the qualified form is treated as unqualified (§5.2.2.4)
+	private         bool // the qualified form is treated as unqualified (§5.2.2.7)
+	public          bool
+	mustRevalidate  bool
+	proxyRevalidate bool
+	onlyIfCached    bool
+	maxAge          int64
+	sMaxAge         int64
+	minFresh        int64
+	// RFC 5861 windows. They don't affect freshness: a malformed value is
+	// ignored and the first one wins.
+	staleWhileRevalidate int64
+	staleIfError         int64
 	// invalid is set by a malformed or duplicated delta-seconds directive:
 	// such a response is considered stale (§4.2.1).
 	invalid bool
 }
 
 func parseCacheControl(values []string) cacheControl {
-	cc := cacheControl{maxAge: -1, sMaxAge: -1, minFresh: -1}
+	cc := cacheControl{maxAge: -1, sMaxAge: -1, minFresh: -1, staleWhileRevalidate: -1, staleIfError: -1}
 	for _, line := range values {
 		for _, d := range splitDirectives(line) {
 			name, value := d, ""
@@ -47,6 +52,8 @@ func parseCacheControl(values []string) cacheControl {
 				cc.public = true
 			case "must-revalidate":
 				cc.mustRevalidate = true
+			case "proxy-revalidate":
+				cc.proxyRevalidate = true
 			case "only-if-cached":
 				cc.onlyIfCached = true
 			case "max-age":
@@ -55,6 +62,10 @@ func parseCacheControl(values []string) cacheControl {
 				cc.sMaxAge = cc.seconds(cc.sMaxAge, value)
 			case "min-fresh":
 				cc.minFresh = cc.seconds(cc.minFresh, value)
+			case "stale-while-revalidate":
+				cc.staleWhileRevalidate = staleSeconds(cc.staleWhileRevalidate, value)
+			case "stale-if-error":
+				cc.staleIfError = staleSeconds(cc.staleIfError, value)
 			}
 		}
 	}
@@ -67,6 +78,16 @@ func (cc *cacheControl) seconds(current int64, value string) int64 {
 	n, ok := parseDeltaSeconds(value)
 	if !ok || current >= 0 {
 		cc.invalid = true
+		return current
+	}
+	return n
+}
+
+// staleSeconds parses the delta-seconds of an RFC 5861 directive, keeping the
+// current value when there is one or when the new one is malformed.
+func staleSeconds(current int64, value string) int64 {
+	n, ok := parseDeltaSeconds(value)
+	if !ok || current >= 0 {
 		return current
 	}
 	return n
@@ -155,8 +176,8 @@ func heuristicallyCacheable(status int) bool {
 
 // freshnessLifetime returns the lifetime of a stored entry: explicit freshness,
 // or defaultTtl. Entries only get stored when defaultTtl was allowed for them.
-func freshnessLifetime(e *entry, defaultTTL time.Duration) time.Duration {
-	cc := parseCacheControl(e.header.Values("Cache-Control"))
+// cc is the Cache-Control of the entry.
+func freshnessLifetime(e *entry, cc cacheControl, defaultTTL time.Duration) time.Duration {
 	if d, ok := explicitFreshness(e.header, cc, e.responseTime); ok {
 		return d
 	}
@@ -276,6 +297,76 @@ func servable(reqCC cacheControl, age, lifetime time.Duration) bool {
 		return false
 	}
 	return true
+}
+
+// staleAllowed reports whether a stored response may be served stale under an
+// RFC 5861 directive, for its delta-seconds past the freshness lifetime. When
+// the response does not carry the directive (-1), the configured fallback
+// applies instead (§4.2.4: stale responses may also be permitted by
+// configuration). Either way the window is capped at staleTtl. staleness is
+// negative while the response is fresh. No directive of the response may forbid
+// serving stale (§4.2.4); s-maxage implies proxy-revalidate (§5.2.2.10).
+func staleAllowed(cc cacheControl, directive int64, fallback, staleness, staleTTL time.Duration) bool {
+	if cc.noCache || cc.mustRevalidate || cc.proxyRevalidate || cc.sMaxAge >= 0 {
+		return false
+	}
+	window := fallback
+	if directive >= 0 {
+		window = seconds(directive)
+	}
+	if window > staleTTL {
+		window = staleTTL
+	}
+	return window > 0 && staleness < window
+}
+
+// servableWhileRevalidating reports whether a stale response may be served
+// while it is revalidated in the background (RFC 5861 §3). A request with
+// max-age or min-fresh does not want a stale response (§5.2.1.1, §5.2.1.3).
+func servableWhileRevalidating(reqCC, cc cacheControl, staleness time.Duration, cfg settings) bool {
+	return staleness >= 0 && reqCC.maxAge < 0 && reqCC.minFresh < 0 &&
+		staleAllowed(cc, cc.staleWhileRevalidate, cfg.defaultStaleWhileRevalidate, staleness, cfg.staleTTL)
+}
+
+// servableOnError reports whether a stored response may replace a backend
+// response with the given status (RFC 5861 §4). The request directives are not
+// looked at: it applies "regardless of other freshness information", and to a
+// response that is still fresh but too old for the client.
+func servableOnError(status int, cc cacheControl, staleness time.Duration, cfg settings) bool {
+	return staleIfErrorStatus(status) &&
+		staleAllowed(cc, cc.staleIfError, cfg.defaultStaleIfError, staleness, cfg.staleTTL)
+}
+
+// staleIfErrorStatus lists the errors of RFC 5861 §4.
+func staleIfErrorStatus(status int) bool {
+	switch status {
+	case 500, 502, 503, 504:
+		return true
+	}
+	return false
+}
+
+// supersedes reports whether a response to a background revalidation that is
+// not stored replaces the stored one anyway, which must then be deleted. It
+// does not when the backend is failing or throttling (5xx, 429), nor when the
+// response is only refused because of the Authorization or Cookie of the
+// request that triggered the revalidation: a request without them would get it
+// stored, and clients must not be able to evict entries.
+func supersedes(status int, h http.Header, cfg settings, requestTime, responseTime time.Time) bool {
+	if status >= 500 || status == http.StatusTooManyRequests {
+		return false
+	}
+	anonymous := &http.Request{Method: http.MethodGet, Header: http.Header{}}
+	_, ok := storeTTL(anonymous, status, h, cfg, requestTime, responseTime)
+	return !ok
+}
+
+// clientOnly lists the request header fields that only concern the
+// client's own copy of the response: a background revalidation fetches the
+// whole representation, whatever the client asked for.
+var clientOnly = []string{
+	"Cache-Control", "Pragma", "Range", "If-Range",
+	"If-Match", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since",
 }
 
 // hopByHop lists header fields never stored nor replayed (RFC 9110 §7.6.1).

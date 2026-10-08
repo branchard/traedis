@@ -11,5 +11,7 @@ testData:
   statusCodes: [ 200 ]
   defaultTtl: 5m
   staleTtl: 1h
+  defaultStaleWhileRevalidate: 0s
+  defaultStaleIfError: 0s
   maxBodyBytes: 5242880
   exposeKey: false

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -232,13 +233,127 @@ func TestStaleEntryIsRefreshed(t *testing.T) {
 	})
 	rec := doRequest(c, http.MethodGet, "http://example.com/a", nil)
 	if b.calls != 1 || rec.Body.String() != "hello" {
-		t.Errorf("§4.2 a stale entry must not be served (no stale support yet)")
+		t.Errorf("§4.2.4 a stale entry must not be served without a directive allowing it")
 	}
 	if got := lastCacheStatus(rec); got != "traedis; fwd=stale; fwd-status=200" {
 		t.Errorf("Cache-Status = %q", got)
 	}
 	if st.sets != 2 {
 		t.Errorf("the entry must be overwritten")
+	}
+}
+
+func TestStaleIfError(t *testing.T) {
+	const sie = "max-age=60, stale-if-error=30"
+	tests := []struct {
+		name         string
+		cacheControl string
+		age          time.Duration
+		method       string
+		reqHdr       http.Header
+		status       int
+		mutate       func(*Config)
+		wantStatus   string // Cache-Status of a stale response; "" when the error must go through
+		wantFwd      string // Cache-Status when the error goes through
+	}{
+		{name: "RFC 5861 §4 500", cacheControl: sie, age: 70 * time.Second, status: 500, wantStatus: "traedis; fwd=stale; fwd-status=500; ttl=-1"},
+		{name: "RFC 5861 §4 502", cacheControl: sie, age: 70 * time.Second, status: 502, wantStatus: "traedis; fwd=stale; fwd-status=502; ttl=-1"},
+		{name: "RFC 5861 §4 503", cacheControl: sie, age: 70 * time.Second, status: 503, wantStatus: "traedis; fwd=stale; fwd-status=503; ttl=-1"},
+		{name: "RFC 5861 §4 504", cacheControl: sie, age: 70 * time.Second, status: 504, wantStatus: "traedis; fwd=stale; fwd-status=504; ttl=-1"},
+		{name: "RFC 5861 §4 HEAD", cacheControl: sie, age: 70 * time.Second, method: http.MethodHead, status: 503, wantStatus: "traedis; fwd=stale; fwd-status=503; ttl=-1"},
+		{name: "RFC 5861 §4 regardless of the request max-age, on a fresh entry", cacheControl: sie, age: 15 * time.Second, reqHdr: http.Header{"Cache-Control": {"max-age=0"}}, status: 503, wantStatus: "traedis; fwd=stale; fwd-status=503; ttl=4"},
+		{name: "RFC 5861 §4 regardless of the request min-fresh", cacheControl: sie, age: 70 * time.Second, reqHdr: http.Header{"Cache-Control": {"min-fresh=10"}}, status: 503, wantStatus: "traedis; fwd=stale; fwd-status=503; ttl=-1"},
+		{name: "RFC 5861 §4 501 is not an error", cacheControl: sie, age: 70 * time.Second, status: 501, wantFwd: "traedis; fwd=stale; fwd-status=501"},
+		{name: "RFC 5861 §4 404 is not an error", cacheControl: sie, age: 70 * time.Second, status: 404, wantFwd: "traedis; fwd=stale; fwd-status=404"},
+		{name: "RFC 5861 §4 window over", cacheControl: sie, age: 91 * time.Second, status: 503, wantFwd: "traedis; fwd=stale; fwd-status=503"},
+		{name: "window capped at staleTtl", cacheControl: "max-age=60, stale-if-error=3600", age: 80 * time.Second, status: 503, mutate: func(c *Config) { c.StaleTTL = "10s" }, wantFwd: "traedis; fwd=stale; fwd-status=503"},
+		{name: "§4.2.4 no directive", cacheControl: "max-age=60", age: 70 * time.Second, status: 503, wantFwd: "traedis; fwd=stale; fwd-status=503"},
+		{name: "§5.2.2.2 must-revalidate", cacheControl: sie + ", must-revalidate", age: 70 * time.Second, status: 503, wantFwd: "traedis; fwd=stale; fwd-status=503"},
+		{name: "§5.2.2.10 s-maxage", cacheControl: "s-maxage=60, stale-if-error=30", age: 70 * time.Second, status: 503, wantFwd: "traedis; fwd=stale; fwd-status=503"},
+		{name: "§4.2.4 defaultStaleIfError when the directive is absent", cacheControl: "max-age=60", age: 70 * time.Second, status: 503, mutate: func(c *Config) { c.DefaultStaleIfError = "30s" }, wantStatus: "traedis; fwd=stale; fwd-status=503; ttl=-1"},
+		{name: "defaultStaleIfError over", cacheControl: "max-age=60", age: 91 * time.Second, status: 503, mutate: func(c *Config) { c.DefaultStaleIfError = "30s" }, wantFwd: "traedis; fwd=stale; fwd-status=503"},
+		{name: "defaultStaleIfError does not replace the directive", cacheControl: "max-age=60, stale-if-error=0", age: 70 * time.Second, status: 503, mutate: func(c *Config) { c.DefaultStaleIfError = "30s" }, wantFwd: "traedis; fwd=stale; fwd-status=503"},
+		{name: "defaultStaleIfError with §5.2.2.10 s-maxage", cacheControl: "s-maxage=60", age: 70 * time.Second, status: 503, mutate: func(c *Config) { c.DefaultStaleIfError = "30s" }, wantFwd: "traedis; fwd=stale; fwd-status=503"},
+		{name: "defaultStaleWhileRevalidate is not defaultStaleIfError", cacheControl: "max-age=60", age: 91 * time.Second, status: 503, mutate: func(c *Config) { c.DefaultStaleWhileRevalidate = "30s" }, wantFwd: "traedis; fwd=stale; fwd-status=503"},
+		{name: "§5.2.1.4 request no-cache does not look at the cache", cacheControl: sie, age: 70 * time.Second, reqHdr: http.Header{"Cache-Control": {"no-cache"}}, status: 503, wantFwd: "traedis; fwd=request; fwd-status=503"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &backend{
+				status: tt.status,
+				header: http.Header{"Content-Type": {"text/html"}, "Retry-After": {"120"}, "Cache-Status": {"origin; fwd=miss"}},
+				body:   "error",
+			}
+			c, st := newTestCache(t, b, tt.mutate)
+			at := time.Now().Add(-tt.age)
+			storeEntry(t, st, "http://example.com/a", &entry{
+				status: 200, header: http.Header{"Cache-Control": {tt.cacheControl}, "Content-Type": {"text/plain"}}, body: []byte("old"),
+				requestTime: at, responseTime: at,
+			})
+			method := tt.method
+			if method == "" {
+				method = http.MethodGet
+			}
+			req := httptest.NewRequest(method, "http://example.com/a", nil)
+			for k, v := range tt.reqHdr {
+				req.Header[k] = v
+			}
+			rec := httptest.NewRecorder()
+			rec.Header().Set("X-Before", "kept") // set by a middleware before the cache
+			c.ServeHTTP(rec, req)
+
+			if b.calls != 1 {
+				t.Fatalf("backend calls = %d, want 1", b.calls)
+			}
+			if st.sets != 1 || st.dels != 0 {
+				t.Errorf("the entry must be left as it was (sets %d, dels %d)", st.sets, st.dels)
+			}
+			if rec.Header().Get("X-Before") != "kept" {
+				t.Error("headers set before the cache must be kept")
+			}
+			got := rec.Header().Values("Cache-Status")
+			if tt.wantStatus == "" {
+				if rec.Code != tt.status || rec.Body.String() != "error" || rec.Header().Get("Retry-After") != "120" {
+					t.Errorf("the backend response must go through: got %d %q %v", rec.Code, rec.Body.String(), rec.Header())
+				}
+				if len(got) != 2 || got[0] != "origin; fwd=miss" || got[1] != tt.wantFwd {
+					t.Errorf("Cache-Status = %q, want %q", got, tt.wantFwd)
+				}
+				return
+			}
+
+			wantBody := "old"
+			if method == http.MethodHead {
+				wantBody = ""
+			}
+			if rec.Code != 200 || rec.Body.String() != wantBody || rec.Header().Get("Content-Length") != "3" {
+				t.Errorf("the stored response must be served: got %d %q", rec.Code, rec.Body.String())
+			}
+			if rec.Header().Get("Content-Type") != "text/plain" || rec.Header().Get("Retry-After") != "" {
+				t.Errorf("nothing of the backend error must be sent: %v", rec.Header())
+			}
+			if len(got) != 1 || !strings.HasPrefix(got[0], tt.wantStatus) || !strings.HasSuffix(got[0], "; detail=stale-if-error") {
+				t.Errorf("Cache-Status = %q, want %q…; detail=stale-if-error", got, tt.wantStatus)
+			}
+			if age := rec.Header().Get("Age"); age != strconv.Itoa(int(tt.age/time.Second)) && age != strconv.Itoa(int(tt.age/time.Second)+1) {
+				t.Errorf("§4.2.3 Age = %q, want %d", age, tt.age/time.Second)
+			}
+		})
+	}
+}
+
+func TestStaleIfErrorAfterStaleWhileRevalidate(t *testing.T) {
+	b := &backend{status: 503, body: "error"}
+	c, st := newTestCache(t, b, nil)
+	// Past the stale-while-revalidate window, within the stale-if-error one.
+	storeAged(t, st, "max-age=60, stale-while-revalidate=10, stale-if-error=300", 2*time.Minute)
+
+	rec := doRequest(c, http.MethodGet, staleURL, nil)
+	if rec.Code != 200 || rec.Body.String() != "old" || b.calls != 1 {
+		t.Errorf("got %d %q (backend calls %d)", rec.Code, rec.Body.String(), b.calls)
+	}
+	if got := lastCacheStatus(rec); got != "traedis; fwd=stale; fwd-status=503; ttl=-60; detail=stale-if-error" && got != "traedis; fwd=stale; fwd-status=503; ttl=-61; detail=stale-if-error" {
+		t.Errorf("Cache-Status = %q", got)
 	}
 }
 
@@ -414,11 +529,15 @@ func TestPassThroughDoesNotWrapWriter(t *testing.T) {
 
 type ctxKey struct{}
 
+func contextWithSpan(req *http.Request) context.Context {
+	return context.WithValue(req.Context(), ctxKey{}, "span")
+}
+
 func TestTraceContextIsPropagated(t *testing.T) {
 	b := cacheableBackend()
 	c, _ := newTestCache(t, b, nil)
 	req := httptest.NewRequest(http.MethodGet, testURL, nil)
-	req = req.WithContext(context.WithValue(req.Context(), ctxKey{}, "span"))
+	req = req.WithContext(contextWithSpan(req))
 	req.Header.Set("Traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
 	req.Header.Set("Tracestate", "vendor=1")
 	c.ServeHTTP(httptest.NewRecorder(), req)

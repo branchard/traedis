@@ -6,17 +6,50 @@ http:
       middlewares:
         - whoami-cache
       service: whoami
+    # Stale responses: here the backend sends `stale-while-revalidate` and `stale-if-error`, and its status can be
+    # changed: `curl -d 503 http://localhost:8080/whoami-stale/health`, then GET the same URL
+    whoami-stale:
+      rule: PathPrefix(`/whoami-stale`)
+      middlewares:
+        - whoami-cache
+        - whoami-stale-headers # after the cache: for the cache, these headers come from the backend
+        - whoami-stale-prefix
+      service: whoami
+    # Same thing for a backend that sends neither: the cache is configured to serve its responses stale
+    whoami-stale-default:
+      rule: PathPrefix(`/whoami-stale-default`)
+      middlewares:
+        - whoami-stale-default
+        - whoami-stale-prefix
+      service: whoami
     whoami:
       rule: PathPrefix(`/whoami`)
       service: whoami
 
   middlewares:
+    whoami-stale-headers:
+      headers:
+        customResponseHeaders:
+          Cache-Control: "max-age=2, stale-while-revalidate=10, stale-if-error=60"
+    whoami-stale-prefix:
+      stripPrefix:
+        prefixes:
+          - /whoami-stale-default # first: the other one is its prefix
+          - /whoami-stale
     whoami-cache:
       plugin:
         traedis:
           redis:
             dsn: "redis://cache:6379/2"
           maxBodyBytes: 5120 # 5 KiB
+    whoami-stale-default:
+      plugin:
+        traedis:
+          redis:
+            dsn: "redis://cache:6379/2"
+          defaultTtl: 2s
+          defaultStaleWhileRevalidate: 10s
+          defaultStaleIfError: 1m
 
   services:
     whoami:

@@ -34,6 +34,7 @@ type fakeRedis struct {
 var defaultReplies = map[string]string{
 	"HGET":   "$5\r\nhello\r\n",
 	"HSETEX": ":1\r\n",
+	"HDEL":   ":1\r\n",
 	"AUTH":   "+OK\r\n",
 	"SELECT": "+OK\r\n",
 }
@@ -174,6 +175,17 @@ func TestRedisGetAndSet(t *testing.T) {
 	}
 	if accepts != 1 {
 		t.Errorf("connections = %d, want 1 (pooled)", accepts)
+	}
+}
+
+func TestRedisDel(t *testing.T) {
+	f := newFakeRedis(t, nil)
+	if err := testClient(f).del(context.Background(), "traedis:k", ""); err != nil {
+		t.Fatalf("del() = %v", err)
+	}
+	cmds := f.received()
+	if len(cmds) != 1 || strings.Join(cmds[0], " ") != "HDEL traedis:k " {
+		t.Errorf("commands = %q", cmds)
 	}
 }
 
@@ -413,5 +425,24 @@ func TestRedisIntegrationRoundTripAndExpiry(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	if _, err := c.get(ctx, key, ""); !errors.Is(err, errMiss) {
 		t.Fatalf("get() after expiry = %v, want errMiss", err)
+	}
+}
+
+func TestRedisIntegrationDel(t *testing.T) {
+	c := integrationClient(t)
+	ctx := context.Background()
+	key := testKey(t)
+
+	if err := c.del(ctx, key, ""); err != nil {
+		t.Fatalf("del() of a missing field = %v", err)
+	}
+	if err := c.set(ctx, key, "", []byte("value"), time.Second); err != nil {
+		t.Fatalf("set() = %v", err)
+	}
+	if err := c.del(ctx, key, ""); err != nil {
+		t.Fatalf("del() = %v", err)
+	}
+	if _, err := c.get(ctx, key, ""); !errors.Is(err, errMiss) {
+		t.Fatalf("get() after del = %v, want errMiss", err)
 	}
 }

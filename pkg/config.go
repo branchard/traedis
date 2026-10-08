@@ -15,12 +15,14 @@ const defaultRedisPort = "6379"
 
 // Config is the plugin configuration, as written in the Traefik dynamic configuration.
 type Config struct {
-	Redis        RedisConfig `json:"redis,omitempty"`
-	StatusCodes  []int       `json:"statusCodes,omitempty"`
-	DefaultTTL   string      `json:"defaultTtl,omitempty"`
-	StaleTTL     string      `json:"staleTtl,omitempty"`
-	MaxBodyBytes int64       `json:"maxBodyBytes,omitempty"`
-	ExposeKey    bool        `json:"exposeKey,omitempty"`
+	Redis                       RedisConfig `json:"redis,omitempty"`
+	StatusCodes                 []int       `json:"statusCodes,omitempty"`
+	DefaultTTL                  string      `json:"defaultTtl,omitempty"`
+	StaleTTL                    string      `json:"staleTtl,omitempty"`
+	DefaultStaleWhileRevalidate string      `json:"defaultStaleWhileRevalidate,omitempty"`
+	DefaultStaleIfError         string      `json:"defaultStaleIfError,omitempty"`
+	MaxBodyBytes                int64       `json:"maxBodyBytes,omitempty"`
+	ExposeKey                   bool        `json:"exposeKey,omitempty"`
 }
 
 // RedisConfig holds the Redis connection options.
@@ -29,29 +31,33 @@ type RedisConfig struct {
 	Timeout string `json:"timeout,omitempty"`
 }
 
-// CreateConfig returns the default configuration (see example/dynamic/cache.yml).
+// CreateConfig returns the default configuration (documented in the README).
 func CreateConfig() *Config {
 	return &Config{
 		Redis: RedisConfig{
 			DSN:     "redis://cache:6379/0",
 			Timeout: "50ms",
 		},
-		StatusCodes:  []int{200},
-		DefaultTTL:   "5m",
-		StaleTTL:     "1h",
-		MaxBodyBytes: 5 << 20,
-		ExposeKey:    false,
+		StatusCodes:                 []int{200},
+		DefaultTTL:                  "5m",
+		StaleTTL:                    "1h",
+		DefaultStaleWhileRevalidate: "0s",
+		DefaultStaleIfError:         "0s",
+		MaxBodyBytes:                5 << 20,
+		ExposeKey:                   false,
 	}
 }
 
 // settings is the validated, parsed form of Config.
 type settings struct {
-	redis        redisOptions
-	statusCodes  []int
-	defaultTTL   time.Duration
-	staleTTL     time.Duration
-	maxBodyBytes int64
-	exposeKey    bool
+	redis                       redisOptions
+	statusCodes                 []int
+	defaultTTL                  time.Duration
+	staleTTL                    time.Duration
+	defaultStaleWhileRevalidate time.Duration
+	defaultStaleIfError         time.Duration
+	maxBodyBytes                int64
+	exposeKey                   bool
 }
 
 // redisOptions describes how to reach Redis. It holds credentials: never log it.
@@ -85,6 +91,12 @@ func parseConfig(cfg *Config) (settings, error) {
 		return s, err
 	}
 	if s.staleTTL, err = parseDuration("staleTtl", cfg.StaleTTL); err != nil {
+		return s, err
+	}
+	if s.defaultStaleWhileRevalidate, err = parseDuration("defaultStaleWhileRevalidate", cfg.DefaultStaleWhileRevalidate); err != nil {
+		return s, err
+	}
+	if s.defaultStaleIfError, err = parseDuration("defaultStaleIfError", cfg.DefaultStaleIfError); err != nil {
 		return s, err
 	}
 

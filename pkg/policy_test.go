@@ -32,7 +32,15 @@ func TestParseCacheControl(t *testing.T) {
 		{name: "§4.2.1 malformed max-age is invalid", values: []string{"max-age=-1"}, check: func(cc cacheControl) bool { return cc.invalid }},
 		{name: "§1.2.2 delta-seconds overflow is capped", values: []string{"max-age=99999999999999999999"}, check: func(cc cacheControl) bool { return cc.maxAge == maxDeltaSeconds }},
 		{name: "unknown directives are ignored", values: []string{"immutable, stale-while-revalidate=5, max-age=1"}, check: func(cc cacheControl) bool { return cc.maxAge == 1 && !cc.invalid }},
-		{name: "absent values are -1", values: nil, check: func(cc cacheControl) bool { return cc.maxAge == -1 && cc.sMaxAge == -1 && cc.minFresh == -1 }},
+		{name: "absent values are -1", values: nil, check: func(cc cacheControl) bool {
+			return cc.maxAge == -1 && cc.sMaxAge == -1 && cc.minFresh == -1 && cc.staleWhileRevalidate == -1 && cc.staleIfError == -1
+		}},
+		{name: "RFC 5861 stale-while-revalidate and stale-if-error", values: []string{"max-age=600, stale-while-revalidate=30, Stale-If-Error=1200"}, check: func(cc cacheControl) bool {
+			return cc.staleWhileRevalidate == 30 && cc.staleIfError == 1200 && !cc.invalid
+		}},
+		{name: "RFC 5861 malformed window is ignored, freshness is kept", values: []string{"max-age=60, stale-if-error=soon"}, check: func(cc cacheControl) bool { return cc.staleIfError == -1 && cc.maxAge == 60 && !cc.invalid }},
+		{name: "RFC 5861 first window wins", values: []string{"stale-while-revalidate=5, stale-while-revalidate=50"}, check: func(cc cacheControl) bool { return cc.staleWhileRevalidate == 5 && !cc.invalid }},
+		{name: "§5.2.2.8 proxy-revalidate", values: []string{"proxy-revalidate"}, check: func(cc cacheControl) bool { return cc.proxyRevalidate && !cc.mustRevalidate }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -206,6 +214,126 @@ func TestServable(t *testing.T) {
 			cc := parseCacheControl([]string{tt.reqCC})
 			if got := servable(cc, tt.age, tt.lifetime); got != tt.want {
 				t.Errorf("servable() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStaleAllowed(t *testing.T) {
+	tests := []struct {
+		name      string
+		cc        string
+		staleness time.Duration
+		staleTTL  time.Duration
+		fallback  time.Duration
+		want      bool
+	}{
+		{name: "RFC 5861 within the window", cc: "max-age=60, stale-if-error=30", staleness: 29 * time.Second, staleTTL: time.Hour, want: true},
+		{name: "RFC 5861 just stale", cc: "max-age=60, stale-if-error=30", staleness: 0, staleTTL: time.Hour, want: true},
+		{name: "RFC 5861 window over", cc: "max-age=60, stale-if-error=30", staleness: 30 * time.Second, staleTTL: time.Hour},
+		{name: "§4.2.4 no directive, no stale", cc: "max-age=60", staleness: time.Second, staleTTL: time.Hour},
+		{name: "window of 0", cc: "max-age=60, stale-if-error=0", staleness: -time.Second, staleTTL: time.Hour},
+		{name: "window capped at staleTtl", cc: "max-age=60, stale-if-error=86400", staleness: 10 * time.Minute, staleTTL: 5 * time.Minute},
+		{name: "window within staleTtl", cc: "max-age=60, stale-if-error=86400", staleness: 4 * time.Minute, staleTTL: 5 * time.Minute, want: true},
+		{name: "staleTtl 0 never serves stale", cc: "max-age=60, stale-if-error=30", staleness: 0, staleTTL: 0},
+		{name: "§5.2.2.2 must-revalidate forbids", cc: "max-age=60, stale-if-error=30, must-revalidate", staleness: time.Second, staleTTL: time.Hour},
+		{name: "§5.2.2.8 proxy-revalidate forbids", cc: "max-age=60, stale-if-error=30, proxy-revalidate", staleness: time.Second, staleTTL: time.Hour},
+		{name: "§5.2.2.10 s-maxage forbids", cc: "s-maxage=60, stale-if-error=30", staleness: time.Second, staleTTL: time.Hour},
+		{name: "§5.2.2.4 no-cache forbids", cc: "max-age=60, stale-if-error=30, no-cache", staleness: time.Second, staleTTL: time.Hour},
+		{name: "§4.2.4 configured window when the directive is absent", cc: "max-age=60", staleness: 29 * time.Second, staleTTL: time.Hour, fallback: 30 * time.Second, want: true},
+		{name: "configured window over", cc: "max-age=60", staleness: 30 * time.Second, staleTTL: time.Hour, fallback: 30 * time.Second},
+		{name: "configured window without Cache-Control (defaultTtl)", cc: "", staleness: time.Second, staleTTL: time.Hour, fallback: 30 * time.Second, want: true},
+		{name: "the directive wins over a longer configured window", cc: "max-age=60, stale-if-error=5", staleness: 10 * time.Second, staleTTL: time.Hour, fallback: 30 * time.Second},
+		{name: "the directive wins over a shorter configured window", cc: "max-age=60, stale-if-error=30", staleness: 10 * time.Second, staleTTL: time.Hour, fallback: 5 * time.Second, want: true},
+		{name: "a directive of 0 turns the configured window off", cc: "max-age=60, stale-if-error=0", staleness: time.Second, staleTTL: time.Hour, fallback: 30 * time.Second},
+		{name: "configured window capped at staleTtl", cc: "max-age=60", staleness: 10 * time.Minute, staleTTL: 5 * time.Minute, fallback: time.Hour},
+		{name: "§5.2.2.2 must-revalidate forbids the configured window", cc: "max-age=60, must-revalidate", staleness: time.Second, staleTTL: time.Hour, fallback: 30 * time.Second},
+		{name: "§5.2.2.10 s-maxage forbids the configured window", cc: "s-maxage=60", staleness: time.Second, staleTTL: time.Hour, fallback: 30 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cc := parseCacheControl([]string{tt.cc})
+			if got := staleAllowed(cc, cc.staleIfError, tt.fallback, tt.staleness, tt.staleTTL); got != tt.want {
+				t.Errorf("staleAllowed() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestServableWhileRevalidating(t *testing.T) {
+	tests := []struct {
+		name      string
+		reqCC     string
+		cc        string
+		staleness time.Duration
+		want      bool
+	}{
+		{name: "RFC 5861 §3 stale within the window", cc: "max-age=60, stale-while-revalidate=30", staleness: 10 * time.Second, want: true},
+		{name: "RFC 5861 §3 window over", cc: "max-age=60, stale-while-revalidate=30", staleness: 30 * time.Second},
+		{name: "stale-if-error is not stale-while-revalidate", cc: "max-age=60, stale-if-error=30", staleness: 10 * time.Second},
+		{name: "a fresh response the client refused is not stale", reqCC: "max-age=5", cc: "max-age=60, stale-while-revalidate=30", staleness: -10 * time.Second},
+		{name: "§5.2.1.1 request max-age wants no stale response", reqCC: "max-age=600", cc: "max-age=60, stale-while-revalidate=30", staleness: 10 * time.Second},
+		{name: "§5.2.1.3 request min-fresh wants no stale response", reqCC: "min-fresh=0", cc: "max-age=60, stale-while-revalidate=30", staleness: 10 * time.Second},
+		{name: "§5.2.1.7 only-if-cached takes it", reqCC: "only-if-cached", cc: "max-age=60, stale-while-revalidate=30", staleness: 10 * time.Second, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := servableWhileRevalidating(parseCacheControl([]string{tt.reqCC}), parseCacheControl([]string{tt.cc}), tt.staleness, testSettings())
+			if got != tt.want {
+				t.Errorf("servableWhileRevalidating() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestServableOnError(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    int
+		cc        string
+		staleness time.Duration
+		want      bool
+	}{
+		{name: "RFC 5861 §4 500", status: 500, cc: "max-age=60, stale-if-error=30", staleness: 10 * time.Second, want: true},
+		{name: "RFC 5861 §4 502", status: 502, cc: "max-age=60, stale-if-error=30", staleness: 10 * time.Second, want: true},
+		{name: "RFC 5861 §4 503", status: 503, cc: "max-age=60, stale-if-error=30", staleness: 10 * time.Second, want: true},
+		{name: "RFC 5861 §4 504", status: 504, cc: "max-age=60, stale-if-error=30", staleness: 10 * time.Second, want: true},
+		{name: "RFC 5861 §4 501 is not an error", status: 501, cc: "max-age=60, stale-if-error=30", staleness: 10 * time.Second},
+		{name: "RFC 5861 §4 404 is not an error", status: 404, cc: "max-age=60, stale-if-error=30", staleness: 10 * time.Second},
+		{name: "RFC 5861 §4 window over", status: 503, cc: "max-age=60, stale-if-error=30", staleness: 30 * time.Second},
+		{name: "stale-while-revalidate is not stale-if-error", status: 503, cc: "max-age=60, stale-while-revalidate=30", staleness: 10 * time.Second},
+		{name: "a fresh response the client refused", status: 503, cc: "max-age=60, stale-if-error=30", staleness: -10 * time.Second, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := servableOnError(tt.status, parseCacheControl([]string{tt.cc}), tt.staleness, testSettings()); got != tt.want {
+				t.Errorf("servableOnError() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSupersedes(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		header http.Header
+		want   bool
+	}{
+		{name: "status not in statusCodes", status: 404, header: http.Header{"Cache-Control": {"max-age=60"}}, want: true},
+		{name: "§5.2.2.5 no-store", status: 200, header: http.Header{"Cache-Control": {"no-store"}}, want: true},
+		{name: "§5.2.2.7 private", status: 200, header: http.Header{"Cache-Control": {"private, max-age=60"}}, want: true},
+		{name: "already stale on arrival", status: 200, header: http.Header{"Cache-Control": {"max-age=60"}, "Age": {"60"}}, want: true},
+		{name: "backend error", status: 503, header: http.Header{}},
+		{name: "any 5xx", status: 507, header: http.Header{}},
+		{name: "backend throttling", status: 429, header: http.Header{}},
+		{name: "storable for a request without credentials: explicit freshness", status: 200, header: http.Header{"Cache-Control": {"max-age=60"}}},
+		{name: "storable for a request without credentials: defaultTtl", status: 200, header: http.Header{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := supersedes(tt.status, tt.header, testSettings(), t0, t0); got != tt.want {
+				t.Errorf("supersedes() = %v, want %v", got, tt.want)
 			}
 		})
 	}

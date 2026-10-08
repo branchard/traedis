@@ -112,6 +112,17 @@ func (c *redisClient) set(ctx context.Context, key, field string, value []byte, 
 	return nil
 }
 
+func (c *redisClient) del(ctx context.Context, key, field string) error {
+	r, err := c.do(ctx, []byte("HDEL"), []byte(key), []byte(field))
+	if err != nil {
+		return err
+	}
+	if r.kind != ':' {
+		return errProtocol
+	}
+	return nil
+}
+
 // do runs one command. Any failure but an error reply closes the connection:
 // its state is unknown.
 func (c *redisClient) do(ctx context.Context, args ...[]byte) (reply, error) {

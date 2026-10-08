@@ -12,16 +12,23 @@ import (
 )
 
 type hookStub struct {
-	calls   int
-	status  int
-	capture bool
+	calls    int
+	status   int
+	capture  bool
+	withhold bool
 }
 
-func (h *hookStub) beforeHeader(status int, hdr http.Header) bool {
+func (h *hookStub) beforeHeader(status int, hdr http.Header) disposition {
 	h.calls++
 	h.status = status
 	hdr.Add("X-Hook", "1")
-	return h.capture
+	if h.withhold {
+		return withhold
+	}
+	if h.capture {
+		return keepCopy
+	}
+	return passOn
 }
 
 // writerStub records the status codes written.
@@ -61,6 +68,28 @@ func TestRecorderNoCaptureWhenHookDeclines(t *testing.T) {
 	_, _ = rec.Write([]byte("nope"))
 	if _, ok := rec.body(); ok {
 		t.Error("body must not be captured")
+	}
+}
+
+func TestRecorderWithholdsResponse(t *testing.T) {
+	rw := &writerStub{header: http.Header{}}
+	rec := newRecorder(rw, &hookStub{withhold: true}, 1024)
+	rec.WriteHeader(http.StatusEarlyHints)
+	rec.WriteHeader(http.StatusServiceUnavailable)
+	n, err := rec.Write([]byte("unavailable"))
+	rec.Flush()
+
+	if n != 11 || err != nil {
+		t.Errorf("Write() = %d, %v: the backend must not see an error", n, err)
+	}
+	if len(rw.codes) != 1 || rw.codes[0] != http.StatusEarlyHints || rw.body.Len() != 0 {
+		t.Errorf("client got codes %v and body %q, want only the informational response", rw.codes, rw.body.String())
+	}
+	if !rec.withheld || rec.status != http.StatusServiceUnavailable {
+		t.Errorf("withheld = %v, status = %d", rec.withheld, rec.status)
+	}
+	if _, ok := rec.body(); ok {
+		t.Error("a withheld response must not be captured")
 	}
 }
 
