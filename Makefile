@@ -1,6 +1,6 @@
 # @see: https://stackoverflow.com/a/70550568
 MAKEFLAGS += --no-print-directory
-.PHONY: help start stop clean unwatch unit e2e bench bench-view assets
+.PHONY: help start stop reset unwatch unit e2e bench bench-view assets
 
 ##@ Global
 help: ## Show this help
@@ -22,7 +22,7 @@ start: unwatch ## Start containers with Docker Compose and Docker Compose Watch
 stop: unwatch ## Stop and delete all containers
 	docker compose down
 
-clean: unwatch ## Stop, delete all containers and remove volumes
+reset: unwatch ## Stop, delete all containers and remove volumes
 	docker compose down --remove-orphans --volumes
 
 unwatch: ## Stop Docker Compose Watch
