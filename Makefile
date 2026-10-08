@@ -1,6 +1,6 @@
 # @see: https://stackoverflow.com/a/70550568
 MAKEFLAGS += --no-print-directory
-.PHONY: help start stop clean unwatch unit e2e bench bench-view
+.PHONY: help start stop clean unwatch unit e2e bench bench-view assets
 
 ##@ Global
 help: ## Show this help
@@ -40,3 +40,14 @@ bench: stop ## Run benchmarks (under Yaegi, then k6 through Traefik) into benchm
 bench-view: ## Show benchmark/results.json as tables → http://localhost:8082/visualizer.html (Ctrl-C to stop)
 	@echo "http://localhost:8082/visualizer.html"
 	-docker compose run --rm --service-ports visualizer
+
+assets: ## Optimize icon.svg with SVGO and generate icon.png
+	@echo "Optimize SVG…"
+	docker run -u "$$(id -u):$$(id -g)" --rm -v "./assets/icon.svg:/assets/icon.svg" oven/bun:alpine bunx --bun svgo \
+	--pretty --multipass "/assets/icon.svg" --output "/assets/icon.svg"
+	@echo "Generate PNG…"
+	docker run -u "$$(id -u):$$(id -g)" --rm -v "./assets:/assets" linuxserver/inkscape inkscape "/assets/icon.svg" \
+	--export-type=png --export-png-antialias=3 --export-filename="/assets/icon.png" --export-area-drawing --export-height=256
+	@echo "Center PNG…"
+	docker run -u "$$(id -u):$$(id -g)" --rm -v "./assets:/assets" dpokidov/imagemagick /assets/icon.png \
+    -gravity center -background none -extent 256x256 /assets/icon.png
