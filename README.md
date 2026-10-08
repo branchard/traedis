@@ -9,14 +9,12 @@
 
 [![CI](https://github.com/branchard/traedis/actions/workflows/ci.yml/badge.svg)](https://github.com/branchard/traedis/actions/workflows/ci.yml)
 
-Redis-backed HTTP cache for Traefik, shipped as a **Traefik v3 middleware plugin**: it stores backend
-responses in Redis and serves them according to [RFC 9111](https://www.rfc-editor.org/rfc/rfc9111)
-(HTTP caching, as a shared cache).
+**Redis**-backed HTTP cache for **Traefik**, shipped as a **middleware plugin**.
 
-- **Standards-based**: honors `Cache-Control` (`max-age`, `s-maxage`, `no-store`, `private`, `no-cache`…), `Expires` and `Age`, on both requests and responses.
+- **Standards-based**: follows [RFC 9111](https://www.rfc-editor.org/rfc/rfc9111) (`Cache-Control`, `ETag`, `Last-Modified`, `304 Not Modified`…), [RFC 5861](https://www.rfc-editor.org/rfc/rfc5861) (`stale-while-revalidate`, `stale-if-error`) and [RFC 9211](https://www.rfc-editor.org/rfc/rfc9211) (`Cache-Status`).
 - **Safe by default**: never caches what must not be shared (`Authorization`, `Set-Cookie`, `private`) unless the backend explicitly allows it.
 - **Fail open**: if Redis is slow or down, requests go straight to the backend.
-- **Observable**: every response carries a [`Cache-Status`](https://www.rfc-editor.org/rfc/rfc9211) header (`hit`, `fwd=uri-miss`, `fwd=bypass`…).
+- **Observable**: every response carries a `Cache-Status` header (`hit`, `fwd=uri-miss`, `fwd=bypass`…).
 - **Stream-friendly**: large bodies, WebSockets and server-sent events pass through untouched.
 
 > [!NOTE]
@@ -40,8 +38,6 @@ experimental:
       moduleName: github.com/branchard/traedis
       version: vX.Y.Z # replace with the release you want
 ```
-
-## Example
 
 Then use it as a middleware in the **dynamic** configuration:
 
