@@ -22,6 +22,7 @@ type Config struct {
 	DefaultStaleWhileRevalidate string      `json:"defaultStaleWhileRevalidate,omitempty"`
 	DefaultStaleIfError         string      `json:"defaultStaleIfError,omitempty"`
 	MaxBodyBytes                int64       `json:"maxBodyBytes,omitempty"`
+	MaxVariants                 int         `json:"maxVariants,omitempty"`
 	ExposeKey                   bool        `json:"exposeKey,omitempty"`
 }
 
@@ -44,6 +45,7 @@ func CreateConfig() *Config {
 		DefaultStaleWhileRevalidate: "0s",
 		DefaultStaleIfError:         "0s",
 		MaxBodyBytes:                5 << 20,
+		MaxVariants:                 16,
 		ExposeKey:                   false,
 	}
 }
@@ -57,7 +59,11 @@ type settings struct {
 	defaultStaleWhileRevalidate time.Duration
 	defaultStaleIfError         time.Duration
 	maxBodyBytes                int64
-	exposeKey                   bool
+	// maxVariants is the number of variants a URI key may hold, on top of its
+	// marker. Past it, new variants are not stored: stored ones are never
+	// evicted. 0: responses with Vary are not stored.
+	maxVariants int
+	exposeKey   bool
 }
 
 // redisOptions describes how to reach Redis. It holds credentials: never log it.
@@ -111,6 +117,11 @@ func parseConfig(cfg *Config) (settings, error) {
 		return s, errors.New("maxBodyBytes must be positive")
 	}
 	s.maxBodyBytes = cfg.MaxBodyBytes
+
+	if cfg.MaxVariants < 0 {
+		return s, errors.New("maxVariants must not be negative")
+	}
+	s.maxVariants = cfg.MaxVariants
 
 	s.exposeKey = cfg.ExposeKey
 

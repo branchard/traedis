@@ -22,11 +22,31 @@ http:
         - whoami-stale-default
         - whoami-stale-prefix
       service: whoami
+    # Variants: here the backend answers by `Accept-Language` (whoami echoes the request headers) and compresses
+    # by `Accept-Encoding`: `curl -H 'Accept-Language: fr' --compressed http://localhost:8080/whoami-vary`
+    whoami-vary:
+      rule: PathPrefix(`/whoami-vary`)
+      middlewares:
+        - whoami-vary
+        - whoami-vary-headers # after the cache: for the cache, `Vary` and the compression come from the backend
+        - whoami-vary-compress
+      service: whoami
     whoami:
       rule: PathPrefix(`/whoami`)
       service: whoami
 
   middlewares:
+    whoami-vary-headers:
+      headers:
+        customResponseHeaders:
+          Cache-Control: "max-age=60"
+          # On every response: `compress` only adds `Vary: Accept-Encoding` to those it compresses, and a response
+          # without `Vary` would be served to all
+          Vary: "Accept-Language, Accept-Encoding"
+    whoami-vary-compress:
+      compress:
+        encodings: [ br, gzip ]
+        minResponseBodyBytes: 1 # whoami's responses are tiny
     whoami-stale-headers:
       headers:
         customResponseHeaders:
@@ -42,6 +62,12 @@ http:
           redis:
             dsn: "redis://cache:6379/2"
           maxBodyBytes: 5120 # 5 KiB
+    whoami-vary:
+      plugin:
+        traedis:
+          redis:
+            dsn: "redis://cache:6379/2"
+          maxVariants: 3 # per URL; 16 by default
     whoami-stale-default:
       plugin:
         traedis:

@@ -36,7 +36,7 @@ func (b *backend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, b.body)
 }
 
-func newTestCache(t *testing.T, b *backend, mutate func(*Config)) (*cache, *memStore) {
+func newTestCache(t *testing.T, b http.Handler, mutate func(*Config)) (*cache, *memStore) {
 	t.Helper()
 	cfg := CreateConfig()
 	if mutate != nil {
@@ -416,7 +416,7 @@ func TestNotStored(t *testing.T) {
 		{name: "§5.2.2.7 private", respHdr: http.Header{"Cache-Control": {"private, max-age=60"}}},
 		{name: "§3.5 Authorization without public", reqHdr: http.Header{"Authorization": {"Bearer x"}}, respHdr: http.Header{"Cache-Control": {"max-age=60"}}},
 		{name: "Set-Cookie without public", respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Set-Cookie": {"sid=1"}}},
-		{name: "Vary not supported yet", respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Vary": {"Accept-Encoding"}}},
+		{name: "Vary: Accept-Encoding with a coding the cache does not know", respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Vary": {"Accept-Encoding"}, "Content-Encoding": {"compress"}}},
 		{name: "statusCodes narrows", status: 404, respHdr: http.Header{"Cache-Control": {"max-age=60"}}},
 		{name: "defaultTtl not applied to requests with Cookie", reqHdr: http.Header{"Cookie": {"sid=1"}}, respHdr: http.Header{}},
 		{name: "body larger than maxBodyBytes is streamed, not stored", respHdr: http.Header{"Cache-Control": {"max-age=60"}}, body: strings.Repeat("x", 100), mutate: func(c *Config) { c.MaxBodyBytes = 10 }},

@@ -28,7 +28,8 @@ type entry struct {
 	body         []byte
 	requestTime  time.Time
 	responseTime time.Time
-	// vary holds the request header values selected by the response Vary.
+	// vary holds the request header values selected by the response Vary; for
+	// Accept-Encoding, the content codings the request accepted (see vary.go).
 	vary http.Header
 }
 

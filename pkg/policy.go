@@ -243,8 +243,8 @@ func storeTTL(req *http.Request, status int, h http.Header, cfg settings, reques
 	if hasSetCookie && !cc.public {
 		return 0, false
 	}
-	// Vary is not supported yet: never risk serving the wrong variant.
-	if hasHeaderValue(h, "Vary") {
+	// §4.1: a response is stored as the variant its Vary selects, if it has one.
+	if !storableVary(h, cfg.maxVariants) {
 		return 0, false
 	}
 	// Trailers are not part of stored entries.

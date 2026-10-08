@@ -35,6 +35,7 @@ var defaultReplies = map[string]string{
 	"HGET":   "$5\r\nhello\r\n",
 	"HSETEX": ":1\r\n",
 	"HDEL":   ":1\r\n",
+	"HLEN":   ":3\r\n",
 	"AUTH":   "+OK\r\n",
 	"SELECT": "+OK\r\n",
 }
@@ -186,6 +187,54 @@ func TestRedisDel(t *testing.T) {
 	cmds := f.received()
 	if len(cmds) != 1 || strings.Join(cmds[0], " ") != "HDEL traedis:k " {
 		t.Errorf("commands = %q", cmds)
+	}
+}
+
+func TestRedisSetVariant(t *testing.T) {
+	f := newFakeRedis(t, nil)
+	c := testClient(f)
+	ctx := context.Background()
+
+	if err := c.setVariant(ctx, "traedis:k", "f1", []byte("v\r\n1"), []byte("marker"), 1500*time.Millisecond, false); err != nil {
+		t.Fatalf("setVariant() = %v", err)
+	}
+	if err := c.setVariant(ctx, "traedis:k", "f1", []byte("v2"), []byte("marker"), time.Second, true); err != nil {
+		t.Fatalf("setVariant() replacing = %v", err)
+	}
+	if err := c.setVariant(ctx, "traedis:k", "f1", []byte("v3"), []byte("marker"), 0, false); err != nil {
+		t.Fatalf("setVariant() without ttl = %v", err)
+	}
+
+	cmds := f.received()
+	want := []string{
+		// The marker and its variant in one command: they expire together.
+		"HSETEX traedis:k PX 1500 FIELDS 2  marker f1 v\r\n1",
+		"HSETEX traedis:k FXX PX 1000 FIELDS 2  marker f1 v2",
+	}
+	if len(cmds) != len(want) {
+		t.Fatalf("commands = %q", cmds)
+	}
+	for i, w := range want {
+		if got := strings.Join(cmds[i], " "); got != w {
+			t.Errorf("command %d = %q, want %q", i, got, w)
+		}
+	}
+}
+
+func TestRedisCount(t *testing.T) {
+	f := newFakeRedis(t, nil)
+	n, err := testClient(f).count(context.Background(), "traedis:k")
+	if err != nil || n != 3 {
+		t.Fatalf("count() = %d, %v, want 3", n, err)
+	}
+	cmds := f.received()
+	if len(cmds) != 1 || strings.Join(cmds[0], " ") != "HLEN traedis:k" {
+		t.Errorf("commands = %q", cmds)
+	}
+
+	f = newFakeRedis(t, map[string]string{"HLEN": "+OK\r\n"})
+	if _, err := testClient(f).count(context.Background(), "traedis:k"); !errors.Is(err, errProtocol) {
+		t.Errorf("count() error = %v, want errProtocol", err)
 	}
 }
 
@@ -444,5 +493,63 @@ func TestRedisIntegrationDel(t *testing.T) {
 	}
 	if _, err := c.get(ctx, key, ""); !errors.Is(err, errMiss) {
 		t.Fatalf("get() after del = %v, want errMiss", err)
+	}
+}
+
+func TestRedisIntegrationVariants(t *testing.T) {
+	c := integrationClient(t)
+	ctx := context.Background()
+	key := testKey(t)
+
+	if n, err := c.count(ctx, key); err != nil || n != 0 {
+		t.Fatalf("count() of a new key = %d, %v", n, err)
+	}
+	// Replacing only: nothing is stored unless the marker and the variant exist.
+	if err := c.setVariant(ctx, key, "f1", []byte("v1"), []byte("m1"), time.Second, true); err != nil {
+		t.Fatalf("setVariant() replacing = %v", err)
+	}
+	if n, err := c.count(ctx, key); err != nil || n != 0 {
+		t.Fatalf("count() = %d, %v: replacing must not create fields", n, err)
+	}
+
+	if err := c.setVariant(ctx, key, "f1", []byte("v1"), []byte("m1"), 300*time.Millisecond, false); err != nil {
+		t.Fatalf("setVariant() = %v", err)
+	}
+	if err := c.setVariant(ctx, key, "f2", []byte("v2"), []byte("m2"), 5*time.Second, false); err != nil {
+		t.Fatalf("setVariant() = %v", err)
+	}
+	if n, err := c.count(ctx, key); err != nil || n != 3 {
+		t.Fatalf("count() = %d, %v, want the marker and 2 variants", n, err)
+	}
+	if err := c.setVariant(ctx, key, "f3", []byte("v3"), []byte("m3"), time.Second, true); err != nil {
+		t.Fatalf("setVariant() replacing = %v", err)
+	}
+	if got, err := c.get(ctx, key, ""); err != nil || string(got) != "m2" {
+		t.Fatalf("marker = %q, %v: replacing a missing variant must not write the marker", got, err)
+	}
+	if err := c.setVariant(ctx, key, "f2", []byte("v2b"), []byte("m2b"), 5*time.Second, true); err != nil {
+		t.Fatalf("setVariant() replacing = %v", err)
+	}
+	for field, want := range map[string]string{"": "m2b", "f1": "v1", "f2": "v2b"} {
+		if got, err := c.get(ctx, key, field); err != nil || string(got) != want {
+			t.Errorf("get(%q) = %q, %v, want %q", field, got, err, want)
+		}
+	}
+
+	// Each field has its own TTL: a variant expires without the others.
+	time.Sleep(500 * time.Millisecond)
+	if _, err := c.get(ctx, key, "f1"); !errors.Is(err, errMiss) {
+		t.Errorf("get() of an expired variant = %v, want errMiss", err)
+	}
+	if got, err := c.get(ctx, key, "f2"); err != nil || string(got) != "v2b" {
+		t.Errorf("get() = %q, %v", got, err)
+	}
+	for _, field := range []string{"", "f2"} {
+		if err := c.del(ctx, key, field); err != nil {
+			t.Fatalf("del() = %v", err)
+		}
+	}
+	if n, err := c.count(ctx, key); err != nil || n != 0 {
+		t.Errorf("count() = %d, %v after cleanup", n, err)
 	}
 }

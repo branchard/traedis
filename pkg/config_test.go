@@ -25,7 +25,7 @@ func TestCreateConfigDefaults(t *testing.T) {
 	if s.defaultStaleWhileRevalidate != 0 || s.defaultStaleIfError != 0 {
 		t.Errorf("§4.2.4 no stale response unless the backend or the configuration allows it: %v, %v", s.defaultStaleWhileRevalidate, s.defaultStaleIfError)
 	}
-	if s.maxBodyBytes != 5242880 || s.exposeKey {
+	if s.maxBodyBytes != 5242880 || s.maxVariants != 16 || s.exposeKey {
 		t.Errorf("settings = %+v", s)
 	}
 }
@@ -54,6 +54,16 @@ func TestParseConfig(t *testing.T) {
 		},
 		{name: "invalid status code", mutate: func(c *Config) { c.StatusCodes = []int{200, 999} }, wantErr: "statusCodes"},
 		{name: "zero maxBodyBytes", mutate: func(c *Config) { c.MaxBodyBytes = 0 }, wantErr: "maxBodyBytes"},
+		{name: "negative maxVariants", mutate: func(c *Config) { c.MaxVariants = -1 }, wantErr: "maxVariants"},
+		{
+			name:   "maxVariants 0 disables variants",
+			mutate: func(c *Config) { c.MaxVariants = 0 },
+			check: func(t *testing.T, s settings) {
+				if s.maxVariants != 0 {
+					t.Errorf("maxVariants = %d", s.maxVariants)
+				}
+			},
+		},
 		{name: "dsn scheme must be redis", mutate: func(c *Config) { c.Redis.DSN = "rediss://cache:6379" }, wantErr: "scheme"},
 		{name: "dsn missing host", mutate: func(c *Config) { c.Redis.DSN = "redis:///0" }, wantErr: "host"},
 		{name: "dsn invalid database", mutate: func(c *Config) { c.Redis.DSN = "redis://cache/abc" }, wantErr: "database"},
@@ -129,6 +139,7 @@ func TestNewWithTestDataWithoutRedis(t *testing.T) {
 	cfg.DefaultStaleWhileRevalidate = "0s"
 	cfg.DefaultStaleIfError = "0s"
 	cfg.MaxBodyBytes = 5242880
+	cfg.MaxVariants = 16
 	cfg.ExposeKey = false
 
 	if _, err := New(context.Background(), http.NotFoundHandler(), cfg, "cache"); err != nil {

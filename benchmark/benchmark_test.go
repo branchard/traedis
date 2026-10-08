@@ -46,11 +46,15 @@ var sizes = []struct {
 type backend struct {
 	body         []byte
 	cacheControl string
+	vary         string
 }
 
 func (h *backend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Cache-Control", h.cacheControl)
+	if h.vary != "" {
+		w.Header().Set("Vary", h.vary)
+	}
 	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(h.body))
 }
 
@@ -111,6 +115,24 @@ func BenchmarkHit(b *testing.B) {
 			expect(b, rec, "hit")
 		})
 	}
+}
+
+// BenchmarkHitVariant is BenchmarkHit/1KB for a response with Vary: it adds the
+// HGET of the marker and the selection of the variant by the request headers.
+func BenchmarkHitVariant(b *testing.B) {
+	h := newHandler(b, &backend{body: make([]byte, 1<<10), cacheControl: longLived, vary: "Accept-Language, Accept-Encoding"}, defaultMaxBody)
+	req := newRequest(http.MethodGet, "/hit-variant?b=2&a=1")
+	req.Header.Set("Accept-Language", "fr-FR,fr;q=0.9,en;q=0.8")
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
+	buf := &bytes.Buffer{}
+	rec := serve(h, req, buf) // stored here
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rec = serve(h, req, buf)
+	}
+	b.StopTimer()
+	expect(b, rec, "hit")
 }
 
 // BenchmarkHitParallel is BenchmarkHit/1KB from GOMAXPROCS goroutines: it adds

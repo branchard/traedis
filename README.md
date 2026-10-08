@@ -19,8 +19,7 @@
 
 > [!NOTE]
 > Traedis is at an early stage. `GET`/`HEAD` caching with RFC 9111 freshness works end to end.
-> Not implemented yet: `Vary`, revalidation with `ETag` / `Last-Modified`, `max-stale`, and invalidation.
-> Until then, responses with a `Vary` header are not cached.
+> Not implemented yet: revalidation with `ETag` / `Last-Modified`, `max-stale`, and invalidation.
 
 ## Requirements
 

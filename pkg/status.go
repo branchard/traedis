@@ -12,7 +12,7 @@ type cacheStatus struct {
 	hit       bool          // answered from the cache without forwarding
 	served    bool          // a stored response was sent although the request was forwarded
 	ttl       time.Duration // remaining freshness of the stored response sent, negative when stale
-	fwd       string        // uri-miss, stale, request, method or bypass
+	fwd       string        // uri-miss, vary-miss, stale, request, method or bypass
 	fwdStatus int           // status received from the backend
 	key       string        // only when exposeKey is set
 	detail    string        // token: redis, stale-while-revalidate or stale-if-error

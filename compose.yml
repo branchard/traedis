@@ -47,8 +47,9 @@ services:
       timeout: 2s
       retries: 15
 
-  # Backend without Cache-Control: exercises `defaultTtl` → http://localhost:8080/whoami-cache (/whoami: without the cache)
-  # and stale responses → http://localhost:8080/whoami-stale (see example/dynamic/whoami.yml)
+  # Backend without Cache-Control: exercises `defaultTtl` → http://localhost:8080/whoami-cache (/whoami: without the cache),
+  # stale responses → http://localhost:8080/whoami-stale and `Vary` → http://localhost:8080/whoami-vary
+  # (see example/dynamic/whoami.yml)
   whoami:
     image: traefik/whoami:latest
 

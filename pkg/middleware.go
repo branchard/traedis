@@ -68,7 +68,19 @@ func (c *cache) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	field := ""
+	status.fwd = "uri-miss"
 	raw, err := c.store.get(r.Context(), key, "")
+	if mk, ok := decodeMarker(raw); err == nil && ok {
+		// The responses of this URI vary: the one selected by the request, if
+		// any, is in a field of its own.
+		status.fwd = "vary-miss"
+		field = mk.field(r.Header)
+		err = errMiss
+		if field != "" {
+			raw, err = c.store.get(r.Context(), key, field)
+		}
+	}
 	if err != nil && !errors.Is(err, errMiss) {
 		// Fail open; don't try to write to a failing Redis.
 		status.fwd = "bypass"
@@ -76,10 +88,9 @@ func (c *cache) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		c.forward(w, r, key, reqCC, status, false, nil)
 		return
 	}
-	status.fwd = "uri-miss"
 	var stored *entry
 	if err == nil {
-		if e, err := decodeEntry(raw, c.maxEntry); err == nil {
+		if e, err := decodeEntry(raw, c.maxEntry); err == nil && selects(e, r.Header) {
 			cc := parseCacheControl(e.header.Values("Cache-Control"))
 			age := currentAge(e.header, e.requestTime, e.responseTime, time.Now())
 			lifetime := freshnessLifetime(e, cc, c.cfg.defaultTTL)
@@ -89,7 +100,7 @@ func (c *cache) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if servableWhileRevalidating(reqCC, cc, age-lifetime, c.cfg) {
-				c.revalidate(r, key)
+				c.revalidate(r, key, field)
 				status.hit = true
 				status.detail = "stale-while-revalidate"
 				c.serve(w, r, e, age, lifetime, status)
@@ -201,15 +212,46 @@ func (c *cache) save(ctx context.Context, rec *recorder, m *missHook, key string
 		body:         body,
 		requestTime:  m.requestTime,
 		responseTime: m.responseTime,
-		vary:         http.Header{},
+		vary:         m.variant.selected,
 	})
 	if int64(len(data)) > c.maxEntry {
 		return false
 	}
-	// The client gets the whole response before the Redis write.
+	// The client gets the whole response before the Redis writes.
 	rec.Flush()
-	_ = c.store.set(ctx, key, "", data, m.ttl)
+	if m.variant.field == "" {
+		_ = c.store.set(ctx, key, "", data, m.ttl)
+	} else {
+		c.saveVariant(ctx, key, m.variant, data, m.ttl)
+	}
 	return true
+}
+
+// saveVariant stores a variant and the marker of its key. Any Redis error ends
+// it: nothing is written to a failing Redis.
+func (c *cache) saveVariant(ctx context.Context, key string, v variant, data []byte, ttl time.Duration) {
+	mk := marker{names: v.names}
+	if v.coding != "" {
+		// The marker lists the codings stored so far. Reading it and writing it
+		// back is not atomic: a coding lost to a concurrent write is a miss for
+		// the requests it would serve, whose response lists it again.
+		mk.codings = []string{v.coding}
+		raw, err := c.store.get(ctx, key, "")
+		if err != nil && !errors.Is(err, errMiss) {
+			return
+		}
+		if old, ok := decodeMarker(raw); ok && sameStrings(old.names, v.names) {
+			mk.codings = v.listed(old.codings)
+		}
+	}
+	n, err := c.store.count(ctx, key)
+	if err != nil {
+		return
+	}
+	// A full key (maxVariants and the marker) only gets its variants replaced.
+	// The count is not atomic either: concurrent writes may exceed the limit
+	// by a few fields.
+	_ = c.store.setVariant(ctx, key, v.field, data, encodeMarker(mk), ttl, n > c.cfg.maxVariants)
 }
 
 // missHook decides, when the backend sends its final status, what becomes of
@@ -223,6 +265,7 @@ type missHook struct {
 	responseTime time.Time
 	header       http.Header // header to store, without our Cache-Status
 	ttl          time.Duration
+	variant      variant // where to store it
 
 	// stale-if-error: the entry that may replace a backend error and, once
 	// staleIfError is set, its age and freshness lifetime.
@@ -254,6 +297,7 @@ func (m *missHook) beforeHeader(code int, h http.Header) disposition {
 		if ok {
 			m.ttl = ttl
 			m.header = headerToStore(h)
+			m.variant = newVariant(m.req, h)
 		}
 	}
 	if m.revalidation {

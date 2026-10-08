@@ -15,10 +15,11 @@ const (
 	revalidationTimeout = 30 * time.Second
 )
 
-// revalidate refreshes the entry of key in the background (RFC 5861 §3), unless
-// it is already being refreshed or maxRevalidations are running: the next
-// request for a stale entry tries again.
-func (c *cache) revalidate(r *http.Request, key string) {
+// revalidate refreshes the entry of key served to r, the one of field, in the
+// background (RFC 5861 §3), unless an entry of key is already being refreshed
+// or maxRevalidations are running: the next request for a stale entry tries
+// again.
+func (c *cache) revalidate(r *http.Request, key, field string) {
 	c.revalMu.Lock()
 	busy := c.revalidating[key] || len(c.revalidating) >= maxRevalidations
 	if !busy {
@@ -30,7 +31,8 @@ func (c *cache) revalidate(r *http.Request, key string) {
 	}
 
 	// The cache's own request for the whole representation, cloned while r is
-	// still ours. It keeps the trace headers but not the request context:
+	// still ours: it keeps the headers that select the variant. It also keeps
+	// the trace headers but not the request context:
 	// Traefik keeps there the state of a request (access log fields…) that
 	// must not be written to once its response is sent.
 	req := r.Clone(context.Background())
@@ -40,14 +42,14 @@ func (c *cache) revalidate(r *http.Request, key string) {
 	for _, name := range clientOnly {
 		req.Header.Del(name)
 	}
-	go c.refresh(req, key)
+	go c.refresh(req, key, field)
 }
 
 // refresh runs a background revalidation: without conditional requests yet
 // (§4.3), a plain GET whose response replaces the entry. A response that is
 // not stored but supersedes the entry deletes it; a backend error leaves it
 // in place, to be served stale for as long as it is allowed.
-func (c *cache) refresh(req *http.Request, key string) {
+func (c *cache) refresh(req *http.Request, key, field string) {
 	defer c.revalidated(key)
 	ctx, cancel := context.WithTimeout(req.Context(), revalidationTimeout)
 	defer cancel()
@@ -60,7 +62,7 @@ func (c *cache) refresh(req *http.Request, key string) {
 		rec.WriteHeader(http.StatusOK)
 	}
 	if !c.save(ctx, rec, m, key) && m.superseded {
-		_ = c.store.del(ctx, key, "")
+		_ = c.store.del(ctx, key, field)
 	}
 }
 

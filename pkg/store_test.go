@@ -11,8 +11,10 @@ type memStore struct {
 	mu   sync.Mutex
 	data map[string]map[string]memValue
 	err  error // returned by every call when set
-	sets int
-	dels int
+	// variantErr is returned when reading a field other than "".
+	variantErr error
+	sets       int
+	dels       int
 }
 
 type memValue struct {
@@ -29,6 +31,9 @@ func (m *memStore) get(_ context.Context, key, field string) ([]byte, error) {
 	defer m.mu.Unlock()
 	if m.err != nil {
 		return nil, m.err
+	}
+	if m.variantErr != nil && field != "" {
+		return nil, m.variantErr
 	}
 	v, ok := m.data[key][field]
 	if !ok {
@@ -49,6 +54,35 @@ func (m *memStore) set(_ context.Context, key, field string, value []byte, ttl t
 	m.data[key][field] = memValue{value: append([]byte(nil), value...), ttl: ttl}
 	m.sets++
 	return nil
+}
+
+func (m *memStore) setVariant(_ context.Context, key, field string, value, marker []byte, ttl time.Duration, replace bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return m.err
+	}
+	_, hasMarker := m.data[key][""]
+	_, hasField := m.data[key][field]
+	if replace && !(hasMarker && hasField) {
+		return nil
+	}
+	if m.data[key] == nil {
+		m.data[key] = map[string]memValue{}
+	}
+	m.data[key][""] = memValue{value: append([]byte(nil), marker...), ttl: ttl}
+	m.data[key][field] = memValue{value: append([]byte(nil), value...), ttl: ttl}
+	m.sets++
+	return nil
+}
+
+func (m *memStore) count(_ context.Context, key string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return 0, m.err
+	}
+	return len(m.data[key]), nil
 }
 
 func (m *memStore) del(_ context.Context, key, field string) error {

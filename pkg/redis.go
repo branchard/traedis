@@ -6,7 +6,8 @@
 //     which Yaegi lacks, and a Go version newer than the Go 1.22 stdlib it exposes;
 //   - its connection pool relies on select statements, which Yaegi runs
 //     incorrectly from several goroutines (see redisClient);
-//   - it would have to be vendored: tens of thousands of lines, for HGET and HSETEX.
+//   - it would have to be vendored: tens of thousands of lines, for HGET, HSETEX,
+//     HDEL and HLEN.
 
 package traedis
 
@@ -97,12 +98,28 @@ func (c *redisClient) get(ctx context.Context, key, field string) ([]byte, error
 }
 
 func (c *redisClient) set(ctx context.Context, key, field string, value []byte, ttl time.Duration) error {
+	return c.hsetex(ctx, key, ttl, false, []byte(field), value)
+}
+
+func (c *redisClient) setVariant(ctx context.Context, key, field string, value, marker []byte, ttl time.Duration, replace bool) error {
+	return c.hsetex(ctx, key, ttl, replace, []byte(""), marker, []byte(field), value)
+}
+
+// hsetex stores fields (name, value, name, value…) in key, all expiring after
+// ttl. With fxx, Redis stores none of them unless they all exist already.
+func (c *redisClient) hsetex(ctx context.Context, key string, ttl time.Duration, fxx bool, fields ...[]byte) error {
 	ms := ttl.Milliseconds()
 	if ms <= 0 {
 		return nil
 	}
-	r, err := c.do(ctx, []byte("HSETEX"), []byte(key), []byte("PX"), []byte(strconv.FormatInt(ms, 10)),
-		[]byte("FIELDS"), []byte("1"), []byte(field), value)
+	args := [][]byte{[]byte("HSETEX"), []byte(key)}
+	if fxx {
+		args = append(args, []byte("FXX"))
+	}
+	args = append(args, []byte("PX"), []byte(strconv.FormatInt(ms, 10)),
+		[]byte("FIELDS"), []byte(strconv.Itoa(len(fields)/2)))
+	args = append(args, fields...)
+	r, err := c.do(ctx, args...)
 	if err != nil {
 		return err
 	}
@@ -110,6 +127,18 @@ func (c *redisClient) set(ctx context.Context, key, field string, value []byte, 
 		return errProtocol
 	}
 	return nil
+}
+
+func (c *redisClient) count(ctx context.Context, key string) (int, error) {
+	r, err := c.do(ctx, []byte("HLEN"), []byte(key))
+	if err != nil {
+		return 0, err
+	}
+	if r.kind != ':' {
+		return 0, errProtocol
+	}
+	n := int(r.num)
+	return n, nil
 }
 
 func (c *redisClient) del(ctx context.Context, key, field string) error {
