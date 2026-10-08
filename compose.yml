@@ -89,8 +89,7 @@ services:
       RI_REDIS_ALIAS2: "Whoami"
       RI_REDIS_DB2: 2
       RI_ACCEPT_TERMS_AND_CONDITIONS: "true"
-    volumes:
-      - insight:/data
+      RI_DATABASE_MANAGEMENT: "false"
 
 volumes:
   cache:
