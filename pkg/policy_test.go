@@ -136,7 +136,6 @@ func TestStoreTTL(t *testing.T) {
 		{name: "Set-Cookie with public", status: 200, respHdr: http.Header{"Cache-Control": {"public, max-age=60"}, "Set-Cookie": {"sid=1"}}, want: time.Minute + time.Hour},
 		{name: "no defaultTtl for Set-Cookie even if public", status: 200, respHdr: http.Header{"Cache-Control": {"public"}, "Set-Cookie": {"sid=1"}}},
 		{name: "Vary not supported yet", status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Vary": {"Accept-Encoding"}}},
-		{name: "vary option not supported yet", status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}}, mutate: func(s *settings) { s.vary = []string{"Accept-Language"} }},
 		{name: "trailers not stored", status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Trailer": {"X-Checksum"}}},
 		{name: "§4.2.1 Expires-based freshness", status: 200, respHdr: http.Header{"Date": {date}, "Expires": {t0.Add(10 * time.Minute).Format(http.TimeFormat)}}, want: 10*time.Minute + time.Hour},
 		{name: "§5.3 invalid Expires not stored", status: 200, respHdr: http.Header{"Expires": {"0"}}},

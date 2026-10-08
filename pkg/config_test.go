@@ -22,7 +22,7 @@ func TestCreateConfigDefaults(t *testing.T) {
 	if s.defaultTTL != 5*time.Minute || s.staleTTL != time.Hour {
 		t.Errorf("defaultTTL = %v, staleTTL = %v", s.defaultTTL, s.staleTTL)
 	}
-	if s.maxBodyBytes != 5242880 || len(s.vary) != 0 || s.exposeKey {
+	if s.maxBodyBytes != 5242880 || s.exposeKey {
 		t.Errorf("settings = %+v", s)
 	}
 }
@@ -49,19 +49,6 @@ func TestParseConfig(t *testing.T) {
 		},
 		{name: "invalid status code", mutate: func(c *Config) { c.StatusCodes = []int{200, 999} }, wantErr: "statusCodes"},
 		{name: "zero maxBodyBytes", mutate: func(c *Config) { c.MaxBodyBytes = 0 }, wantErr: "maxBodyBytes"},
-		{name: "vary Cookie rejected", mutate: func(c *Config) { c.Vary = []string{"cookie"} }, wantErr: "Cookie"},
-		{name: "vary Authorization rejected", mutate: func(c *Config) { c.Vary = []string{"Authorization"} }, wantErr: "Authorization"},
-		{name: "vary star rejected", mutate: func(c *Config) { c.Vary = []string{"*"} }, wantErr: "vary"},
-		{name: "vary invalid token rejected", mutate: func(c *Config) { c.Vary = []string{"Accept Language"} }, wantErr: "vary"},
-		{
-			name:   "vary canonicalized and deduplicated",
-			mutate: func(c *Config) { c.Vary = []string{"accept-language", "Accept-Language", " x-device "} },
-			check: func(t *testing.T, s settings) {
-				if strings.Join(s.vary, ",") != "Accept-Language,X-Device" {
-					t.Errorf("vary = %v", s.vary)
-				}
-			},
-		},
 		{name: "dsn scheme must be redis", mutate: func(c *Config) { c.Redis.DSN = "rediss://cache:6379" }, wantErr: "scheme"},
 		{name: "dsn missing host", mutate: func(c *Config) { c.Redis.DSN = "redis:///0" }, wantErr: "host"},
 		{name: "dsn invalid database", mutate: func(c *Config) { c.Redis.DSN = "redis://cache/abc" }, wantErr: "database"},
@@ -135,7 +122,6 @@ func TestNewWithTestDataWithoutRedis(t *testing.T) {
 	cfg.DefaultTTL = "5m"
 	cfg.StaleTTL = "1h"
 	cfg.MaxBodyBytes = 5242880
-	cfg.Vary = []string{"Accept-Language"}
 	cfg.ExposeKey = false
 
 	if _, err := New(context.Background(), http.NotFoundHandler(), cfg, "cache"); err != nil {

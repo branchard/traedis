@@ -223,7 +223,7 @@ func storeTTL(req *http.Request, status int, h http.Header, cfg settings, reques
 		return 0, false
 	}
 	// Vary is not supported yet: never risk serving the wrong variant.
-	if hasHeaderValue(h, "Vary") || len(cfg.vary) > 0 {
+	if hasHeaderValue(h, "Vary") {
 		return 0, false
 	}
 	// Trailers are not part of stored entries.

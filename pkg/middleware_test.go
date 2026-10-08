@@ -302,7 +302,6 @@ func TestNotStored(t *testing.T) {
 		{name: "§3.5 Authorization without public", reqHdr: http.Header{"Authorization": {"Bearer x"}}, respHdr: http.Header{"Cache-Control": {"max-age=60"}}},
 		{name: "Set-Cookie without public", respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Set-Cookie": {"sid=1"}}},
 		{name: "Vary not supported yet", respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Vary": {"Accept-Encoding"}}},
-		{name: "vary option not supported yet", respHdr: http.Header{"Cache-Control": {"max-age=60"}}, mutate: func(c *Config) { c.Vary = []string{"Accept-Language"} }},
 		{name: "statusCodes narrows", status: 404, respHdr: http.Header{"Cache-Control": {"max-age=60"}}},
 		{name: "defaultTtl not applied to requests with Cookie", reqHdr: http.Header{"Cookie": {"sid=1"}}, respHdr: http.Header{}},
 		{name: "body larger than maxBodyBytes is streamed, not stored", respHdr: http.Header{"Cache-Control": {"max-age=60"}}, body: strings.Repeat("x", 100), mutate: func(c *Config) { c.MaxBodyBytes = 10 }},

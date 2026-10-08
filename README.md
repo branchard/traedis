@@ -86,7 +86,6 @@ All keys are optional.
 | `defaultTtl`    | `5m`                   | Freshness when the backend sends no `max-age`, `s-maxage` or `Expires`. `0` disables it. Never applied to requests with `Authorization` or `Cookie`, nor to responses with `Set-Cookie`. |
 | `staleTtl`      | `1h`                   | How long an entry is kept in Redis after it expires. Serving stale responses is not implemented yet.                                         |
 | `maxBodyBytes`  | `5242880` (5 MiB)      | Larger responses are streamed to the client and not cached.                                                                                  |
-| `vary`          | `[]`                   | Request headers to cache separate variants for. `Cookie` and `Authorization` are rejected. Not implemented yet: a non-empty list disables caching. |
 | `exposeKey`     | `false`                | Add the cache key to the `Cache-Status` header (`key="…"`).                                                                                  |
 
 Durations use the [Go syntax](https://pkg.go.dev/time#ParseDuration) (`50ms`, `5m`, `1h`).

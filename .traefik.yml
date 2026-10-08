@@ -12,5 +12,4 @@ testData:
   defaultTtl: 5m
   staleTtl: 1h
   maxBodyBytes: 5242880
-  vary: [ Accept-Language ]
   exposeKey: false

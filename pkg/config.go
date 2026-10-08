@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/textproto"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -22,7 +20,6 @@ type Config struct {
 	DefaultTTL   string      `json:"defaultTtl,omitempty"`
 	StaleTTL     string      `json:"staleTtl,omitempty"`
 	MaxBodyBytes int64       `json:"maxBodyBytes,omitempty"`
-	Vary         []string    `json:"vary,omitempty"`
 	ExposeKey    bool        `json:"exposeKey,omitempty"`
 }
 
@@ -43,7 +40,6 @@ func CreateConfig() *Config {
 		DefaultTTL:   "5m",
 		StaleTTL:     "1h",
 		MaxBodyBytes: 5 << 20,
-		Vary:         []string{},
 		ExposeKey:    false,
 	}
 }
@@ -55,7 +51,6 @@ type settings struct {
 	defaultTTL   time.Duration
 	staleTTL     time.Duration
 	maxBodyBytes int64
-	vary         []string // canonical header names
 	exposeKey    bool
 }
 
@@ -105,9 +100,6 @@ func parseConfig(cfg *Config) (settings, error) {
 	}
 	s.maxBodyBytes = cfg.MaxBodyBytes
 
-	if s.vary, err = parseVary(cfg.Vary); err != nil {
-		return s, err
-	}
 	s.exposeKey = cfg.ExposeKey
 
 	return s, nil
@@ -157,42 +149,4 @@ func parseDSN(dsn string) (redisOptions, error) {
 		o.db = n
 	}
 	return o, nil
-}
-
-func parseVary(names []string) ([]string, error) {
-	var out []string
-	for _, name := range names {
-		name = strings.TrimSpace(name)
-		if !isToken(name) || name == "*" {
-			return nil, fmt.Errorf("vary: invalid header name %q", name)
-		}
-		name = textproto.CanonicalMIMEHeaderKey(name)
-		if name == "Cookie" || name == "Authorization" {
-			return nil, fmt.Errorf("vary: %s is not allowed (one variant per user)", name)
-		}
-		if !slices.Contains(out, name) {
-			out = append(out, name)
-		}
-	}
-	return out, nil
-}
-
-// isToken reports whether s is a non-empty RFC 9110 token.
-func isToken(s string) bool {
-	if s == "" {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		if !isTokenChar(s[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func isTokenChar(c byte) bool {
-	if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
-		return true
-	}
-	return strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0
 }
