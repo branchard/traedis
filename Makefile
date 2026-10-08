@@ -11,6 +11,13 @@ help: ## Show this help
 start: unwatch ## Start containers with Docker Compose and Docker Compose Watch
 	docker compose up -d --force-recreate
 	nohup docker compose watch </dev/null >/dev/null 2>&1 & echo $$! > /tmp/compose-watch.traedis.pid
+	@echo "Open http://localhost:8080/whoami to see whoami page without caching"
+	@echo "Open http://localhost:8080/whoami-cache to see whoami page with caching"
+	@echo "Open http://localhost:8080/placeholder/800x600 to see sample image without caching"
+	@echo "Open http://localhost:8080/placeholder-cache/800x600 to see sample image with caching"
+	@echo "Open http://localhost:8080/imaging/unsafe/rs:fill:300:200/plain/http://placeholder:3000/800x600@avif to see sample image through imgproxy without caching"
+	@echo "Open http://localhost:8080/imaging-cache/unsafe/rs:fill:300:200/plain/http://placeholder:3000/800x600@avif to see sample image through imgproxy with caching"
+	@echo "Open http://localhost:5540/ to see what is stored on Redis"
 
 stop: unwatch ## Stop and delete all containers
 	docker compose down
