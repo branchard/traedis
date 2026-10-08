@@ -4,7 +4,7 @@ http:
     placeholder-cache:
       rule: PathPrefix(`/placeholder-cache`)
       middlewares:
-        - cache # before the prefix is stripped: the cache key is the public URL
+        - placeholder-cache # before the prefix is stripped: the cache key is the public URL
         - placeholder-prefix
       service: placeholder
     placeholder:
@@ -20,6 +20,11 @@ http:
         prefixes:
           - /placeholder-cache
           - /placeholder
+    placeholder-cache:
+      plugin:
+        traedis:
+          redis:
+            dsn: "redis://cache:6379/1"
 
   services:
     placeholder:

@@ -33,7 +33,7 @@ e2e: stop ## Run end-to-end tests (Hurl through Traefik)
 	./e2e/run.sh; status=$$?; docker compose down; exit $$status
 
 bench: stop ## Run benchmarks (under Yaegi, then k6 through Traefik) into benchmark/results.json
-	docker compose up -d --wait --wait-timeout 120 ingress cache whoami placeholder
+	docker compose up -d --wait --wait-timeout 120 ingress cache whoami placeholder imaging
 	@# Always stop the containers, even when a benchmark fails
 	./benchmark/run.sh; status=$$?; docker compose down; exit $$status
 

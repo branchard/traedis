@@ -4,11 +4,19 @@ http:
     whoami-cache:
       rule: PathPrefix(`/whoami-cache`)
       middlewares:
-        - cache
+        - whoami-cache
       service: whoami
     whoami:
       rule: PathPrefix(`/whoami`)
       service: whoami
+
+  middlewares:
+    whoami-cache:
+      plugin:
+        traedis:
+          redis:
+            dsn: "redis://cache:6379/2"
+          maxBodyBytes: 5120 # 5 KiB
 
   services:
     whoami:

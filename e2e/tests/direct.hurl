@@ -17,3 +17,9 @@ GET {{base_url}}/placeholder/600x600?run={{run}}
 HTTP 200
 [Asserts]
 header "Cache-Status" not exists
+
+GET {{base_url}}/imaging/unsafe/rs:fill:300:200/plain/http://placeholder:3000/600x600@avif?run={{run}}
+HTTP 200
+[Asserts]
+header "Content-Type" == "image/avif"
+header "Cache-Status" not exists
