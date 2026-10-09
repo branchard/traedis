@@ -16,6 +16,7 @@
 - **Fail open**: if Redis is slow or down, requests go straight to the backend.
 - **Observable**: every response carries a `Cache-Status` header (`hit`, `fwd=uri-miss`, `fwd=bypass`…).
 - **Stream-friendly**: large bodies, WebSockets and server-sent events pass through untouched.
+- **Persistent and shared**: responses are stored in Redis, not in Traefik's memory, so the cache survives Traefik restarts and redeploys, and all Traefik replicas share it.
 
 ## Requirements
 
