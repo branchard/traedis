@@ -69,7 +69,7 @@ http:
 A complete local setup (Traefik, Redis, sample backends) is available in [`compose.yml`](compose.yml)
 and [`example/`](example).
 
-## Configuration
+## Middleware Configuration Keys
 
 All keys are optional.
 
