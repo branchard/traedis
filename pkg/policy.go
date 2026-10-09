@@ -13,9 +13,12 @@ const maxDeltaSeconds = 2147483648
 // cacheControl holds the Cache-Control directives the cache acts upon.
 // Delta-seconds fields are -1 when absent.
 type cacheControl struct {
-	noStore         bool
-	noCache         bool // the qualified form is treated as unqualified (§5.2.2.4)
-	private         bool // the qualified form is treated as unqualified (§5.2.2.7)
+	noStore bool
+	noCache bool // unqualified form (§5.2.2.4)
+	private bool // unqualified form (§5.2.2.7)
+	// unstored lists the header fields named by the qualified forms of no-cache
+	// and private: the response is kept without them (§3.1). Canonical names.
+	unstored        []string
 	public          bool
 	mustRevalidate  bool
 	proxyRevalidate bool
@@ -35,7 +38,7 @@ type cacheControl struct {
 func parseCacheControl(values []string) cacheControl {
 	cc := cacheControl{maxAge: -1, sMaxAge: -1, minFresh: -1, staleWhileRevalidate: -1, staleIfError: -1}
 	for _, line := range values {
-		for _, d := range splitDirectives(line) {
+		for _, d := range splitList(line) {
 			name, value := d, ""
 			if i := strings.IndexByte(d, '='); i >= 0 {
 				name = d[:i]
@@ -45,9 +48,13 @@ func parseCacheControl(values []string) cacheControl {
 			case "no-store":
 				cc.noStore = true
 			case "no-cache":
-				cc.noCache = true
+				if cc.unqualified(value) {
+					cc.noCache = true
+				}
 			case "private":
-				cc.private = true
+				if cc.unqualified(value) {
+					cc.private = true
+				}
 			case "public":
 				cc.public = true
 			case "must-revalidate":
@@ -70,6 +77,26 @@ func parseCacheControl(values []string) cacheControl {
 		}
 	}
 	return cc
+}
+
+// unqualified handles the argument of a no-cache or private directive. The
+// qualified form lists header fields, which are added to unstored: it then
+// reports false. Without argument, or with one that is not a list of field
+// names, the directive is the unqualified one, about the whole response.
+func (cc *cacheControl) unqualified(value string) bool {
+	if value == "" {
+		return true
+	}
+	var names []string
+	for _, name := range strings.Split(value, ",") {
+		name = strings.TrimSpace(name)
+		if !isToken(name) {
+			return true
+		}
+		names = append(names, http.CanonicalHeaderKey(name))
+	}
+	cc.unstored = append(cc.unstored, names...)
+	return false
 }
 
 // seconds parses a delta-seconds value. A duplicate or malformed value marks
@@ -113,8 +140,9 @@ func parseDeltaSeconds(s string) (int64, bool) {
 	return n, true
 }
 
-// splitDirectives splits a Cache-Control line on commas outside quoted strings.
-func splitDirectives(s string) []string {
+// splitList splits a field line holding a list (RFC 9110 §5.6.1) on commas
+// outside quoted strings: Cache-Control directives, entity tags.
+func splitList(s string) []string {
 	var out []string
 	start, quoted := 0, false
 	for i := 0; i < len(s); i++ {
@@ -122,14 +150,14 @@ func splitDirectives(s string) []string {
 			quoted = !quoted
 		}
 		if s[i] == ',' && !quoted {
-			out = appendDirective(out, s[start:i])
+			out = appendItem(out, s[start:i])
 			start = i + 1
 		}
 	}
-	return appendDirective(out, s[start:])
+	return appendItem(out, s[start:])
 }
 
-func appendDirective(out []string, d string) []string {
+func appendItem(out []string, d string) []string {
 	if d = strings.TrimSpace(d); d != "" {
 		out = append(out, d)
 	}
@@ -231,7 +259,8 @@ func storeTTL(req *http.Request, status int, h http.Header, cfg settings, reques
 	if cc.noStore || cc.private {
 		return 0, false
 	}
-	// No revalidation yet: a no-cache response could never be served.
+	// A no-cache response is never served without being validated first
+	// (§5.2.2.4): the cache does not keep responses for that only.
 	if cc.noCache {
 		return 0, false
 	}
@@ -239,8 +268,11 @@ func storeTTL(req *http.Request, status int, h http.Header, cfg settings, reques
 	if hasAuth && !cc.public && cc.sMaxAge < 0 && !cc.mustRevalidate {
 		return 0, false
 	}
+	// A cookie is never shared: the response is only stored without its
+	// Set-Cookie, which takes the backend to ask for it (§3.1, §5.2.2.7) with
+	// private="Set-Cookie" or no-cache="Set-Cookie".
 	hasSetCookie := len(h.Values("Set-Cookie")) > 0
-	if hasSetCookie && !cc.public {
+	if hasSetCookie && !slices.Contains(cc.unstored, "Set-Cookie") {
 		return 0, false
 	}
 	// §4.1: a response is stored as the variant its Vary selects, if it has one.
@@ -274,7 +306,9 @@ func storeTTL(req *http.Request, status int, h http.Header, cfg settings, reques
 func lookupAllowed(req *http.Request) bool {
 	values := req.Header.Values("Cache-Control")
 	if len(values) > 0 {
-		return !parseCacheControl(values).noCache
+		// no-cache has no qualified form in a request: an argument is ignored.
+		cc := parseCacheControl(values)
+		return !cc.noCache && len(cc.unstored) == 0
 	}
 	for _, p := range req.Header.Values("Pragma") {
 		if strings.Contains(strings.ToLower(p), "no-cache") {
@@ -376,9 +410,19 @@ var hopByHop = []string{
 	"Te", "Trailer", "Transfer-Encoding", "Upgrade", "Content-Length",
 }
 
-// headerToStore copies the response header without hop-by-hop fields and without
-// Set-Cookie: only the client that caused the miss gets the cookie.
+// headerToStore copies the response header without hop-by-hop fields and
+// without the fields its Cache-Control forbids to store (§3.1): only the
+// client that caused the miss gets those.
 func headerToStore(h http.Header) http.Header {
+	out := endToEnd(h)
+	for _, name := range parseCacheControl(h.Values("Cache-Control")).unstored {
+		out.Del(name)
+	}
+	return out
+}
+
+// endToEnd copies a response header without hop-by-hop fields.
+func endToEnd(h http.Header) http.Header {
 	out := h.Clone()
 	for _, v := range h.Values("Connection") {
 		for _, name := range strings.Split(v, ",") {
@@ -390,7 +434,6 @@ func headerToStore(h http.Header) http.Header {
 	for _, name := range hopByHop {
 		out.Del(name)
 	}
-	out.Del("Set-Cookie")
 	return out
 }
 

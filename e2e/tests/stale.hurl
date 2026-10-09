@@ -58,7 +58,7 @@ GET {{base_url}}/whoami-stale/health?sie={{run}}
 Cache-Control: max-age=0
 HTTP 200
 [Asserts]
-header "Cache-Status" matches /^traedis; fwd=stale; fwd-status=503; ttl=-?\d+; detail=stale-if-error$/
+header "Cache-Status" matches /^traedis; fwd=(stale|request); fwd-status=503; ttl=-?\d+; detail=stale-if-error$/
 header "Age" matches /^\d+$/
 
 # no-cache (RFC 9111 §5.2.1.4): the cache is not looked at, the error goes through
@@ -127,7 +127,7 @@ GET {{base_url}}/whoami-stale-default/health?default={{run}}
 Cache-Control: max-age=0
 HTTP 200
 [Asserts]
-header "Cache-Status" matches /^traedis; fwd=stale; fwd-status=503; ttl=-?\d+; detail=stale-if-error$/
+header "Cache-Status" matches /^traedis; fwd=(stale|request); fwd-status=503; ttl=-?\d+; detail=stale-if-error$/
 
 GET {{base_url}}/whoami-stale-default/health?default={{run}}
 [Options]

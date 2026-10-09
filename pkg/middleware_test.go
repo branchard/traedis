@@ -193,8 +193,8 @@ func TestRequestDirectives(t *testing.T) {
 	}{
 		{name: "§5.2.1.4 no-cache forwards and refreshes", header: http.Header{"Cache-Control": {"no-cache"}}, wantCalls: 2, wantCode: 200, wantStatus: "traedis; fwd=request; fwd-status=200"},
 		{name: "§5.4 Pragma no-cache forwards", header: http.Header{"Pragma": {"no-cache"}}, wantCalls: 2, wantCode: 200, wantStatus: "traedis; fwd=request; fwd-status=200"},
-		{name: "§5.2.1.1 max-age=0 forwards", header: http.Header{"Cache-Control": {"max-age=0"}}, wantCalls: 2, wantCode: 200, wantStatus: "traedis; fwd=stale; fwd-status=200"},
-		{name: "§5.2.1.3 min-fresh too large forwards", header: http.Header{"Cache-Control": {"min-fresh=3600"}}, wantCalls: 2, wantCode: 200, wantStatus: "traedis; fwd=stale; fwd-status=200"},
+		{name: "§5.2.1.1 max-age=0 forwards", header: http.Header{"Cache-Control": {"max-age=0"}}, wantCalls: 2, wantCode: 200, wantStatus: "traedis; fwd=request; fwd-status=200"},
+		{name: "§5.2.1.3 min-fresh too large forwards", header: http.Header{"Cache-Control": {"min-fresh=3600"}}, wantCalls: 2, wantCode: 200, wantStatus: "traedis; fwd=request; fwd-status=200"},
 		{name: "§5.2.1.5 no-store may be served", header: http.Header{"Cache-Control": {"no-store"}}, wantCalls: 1, wantCode: 200, wantStatus: "hit"},
 		{name: "§5.2.1.7 only-if-cached served from cache", header: http.Header{"Cache-Control": {"only-if-cached"}}, wantCalls: 1, wantCode: 200, wantStatus: "hit"},
 	}
@@ -261,7 +261,7 @@ func TestStaleIfError(t *testing.T) {
 		{name: "RFC 5861 §4 503", cacheControl: sie, age: 70 * time.Second, status: 503, wantStatus: "traedis; fwd=stale; fwd-status=503; ttl=-1"},
 		{name: "RFC 5861 §4 504", cacheControl: sie, age: 70 * time.Second, status: 504, wantStatus: "traedis; fwd=stale; fwd-status=504; ttl=-1"},
 		{name: "RFC 5861 §4 HEAD", cacheControl: sie, age: 70 * time.Second, method: http.MethodHead, status: 503, wantStatus: "traedis; fwd=stale; fwd-status=503; ttl=-1"},
-		{name: "RFC 5861 §4 regardless of the request max-age, on a fresh entry", cacheControl: sie, age: 15 * time.Second, reqHdr: http.Header{"Cache-Control": {"max-age=0"}}, status: 503, wantStatus: "traedis; fwd=stale; fwd-status=503; ttl=4"},
+		{name: "RFC 5861 §4 regardless of the request max-age, on a fresh entry", cacheControl: sie, age: 15 * time.Second, reqHdr: http.Header{"Cache-Control": {"max-age=0"}}, status: 503, wantStatus: "traedis; fwd=request; fwd-status=503; ttl=4"},
 		{name: "RFC 5861 §4 regardless of the request min-fresh", cacheControl: sie, age: 70 * time.Second, reqHdr: http.Header{"Cache-Control": {"min-fresh=10"}}, status: 503, wantStatus: "traedis; fwd=stale; fwd-status=503; ttl=-1"},
 		{name: "RFC 5861 §4 501 is not an error", cacheControl: sie, age: 70 * time.Second, status: 501, wantFwd: "traedis; fwd=stale; fwd-status=501"},
 		{name: "RFC 5861 §4 404 is not an error", cacheControl: sie, age: 70 * time.Second, status: 404, wantFwd: "traedis; fwd=stale; fwd-status=404"},
@@ -415,7 +415,8 @@ func TestNotStored(t *testing.T) {
 		{name: "§5.2.2.5 no-store", respHdr: http.Header{"Cache-Control": {"no-store"}}},
 		{name: "§5.2.2.7 private", respHdr: http.Header{"Cache-Control": {"private, max-age=60"}}},
 		{name: "§3.5 Authorization without public", reqHdr: http.Header{"Authorization": {"Bearer x"}}, respHdr: http.Header{"Cache-Control": {"max-age=60"}}},
-		{name: "Set-Cookie without public", respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Set-Cookie": {"sid=1"}}},
+		{name: "Set-Cookie", respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Set-Cookie": {"sid=1"}}},
+		{name: "Set-Cookie, even with public", respHdr: http.Header{"Cache-Control": {"public, max-age=60"}, "Set-Cookie": {"sid=1"}}},
 		{name: "Vary: Accept-Encoding with a coding the cache does not know", respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Vary": {"Accept-Encoding"}, "Content-Encoding": {"compress"}}},
 		{name: "statusCodes narrows", status: 404, respHdr: http.Header{"Cache-Control": {"max-age=60"}}},
 		{name: "defaultTtl not applied to requests with Cookie", reqHdr: http.Header{"Cookie": {"sid=1"}}, respHdr: http.Header{}},
@@ -441,15 +442,23 @@ func TestNotStored(t *testing.T) {
 }
 
 func TestSetCookieIsNotReplayed(t *testing.T) {
-	b := &backend{header: http.Header{"Cache-Control": {"public, max-age=60"}, "Set-Cookie": {"sid=1"}}, body: "hello"}
-	c, _ := newTestCache(t, b, nil)
-	first := doRequest(c, http.MethodGet, testURL, nil)
-	if first.Header().Get("Set-Cookie") != "sid=1" {
-		t.Error("the client causing the miss must get Set-Cookie")
-	}
-	second := doRequest(c, http.MethodGet, testURL, nil)
-	if b.calls != 1 || second.Header().Get("Set-Cookie") != "" {
-		t.Errorf("hit must not replay Set-Cookie (calls %d, Set-Cookie %q)", b.calls, second.Header().Get("Set-Cookie"))
+	for _, cacheControl := range []string{`max-age=60, private="Set-Cookie, X-User"`, `max-age=60, no-cache="set-cookie", private="x-user"`} {
+		t.Run(cacheControl, func(t *testing.T) {
+			b := &backend{header: http.Header{"Cache-Control": {cacheControl}, "Set-Cookie": {"sid=1"}, "X-User": {"bob"}, "X-Other": {"kept"}}, body: "hello"}
+			c, _ := newTestCache(t, b, nil)
+			first := doRequest(c, http.MethodGet, testURL, nil)
+			if first.Header().Get("Set-Cookie") != "sid=1" || first.Header().Get("X-User") != "bob" {
+				t.Errorf("the client causing the miss must get the whole response: %v", first.Header())
+			}
+			second := doRequest(c, http.MethodGet, testURL, nil)
+			if b.calls != 1 || !strings.HasPrefix(lastCacheStatus(second), "traedis; hit") || second.Body.String() != "hello" {
+				t.Fatalf("§5.2.2.7 the rest of the response must be stored: %q (backend calls %d)", lastCacheStatus(second), b.calls)
+			}
+			h := second.Header()
+			if h.Get("Set-Cookie") != "" || h.Get("X-User") != "" || h.Get("X-Other") != "kept" || h.Get("Cache-Control") != cacheControl {
+				t.Errorf("§3.1 a hit must not have the fields that are not stored, and only those: %v", h)
+			}
+		})
 	}
 }
 

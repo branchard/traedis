@@ -31,11 +31,35 @@ http:
         - whoami-vary-headers # after the cache: for the cache, `Vary` and the compression come from the backend
         - whoami-vary-compress
       service: whoami
+    # Cookies: here the backend sets a cookie and tells caches not to store it (`private="Set-Cookie"`): the
+    # response is cached without it. /whoami-cookie-public only says `public`: it is not cached at all
+    whoami-cookie:
+      rule: PathPrefix(`/whoami-cookie`)
+      middlewares:
+        - whoami-cache
+        - whoami-cookie-headers # after the cache: for the cache, these headers come from the backend
+      service: whoami
+    whoami-cookie-public:
+      rule: PathPrefix(`/whoami-cookie-public`)
+      middlewares:
+        - whoami-cache
+        - whoami-cookie-public-headers
+      service: whoami
     whoami:
       rule: PathPrefix(`/whoami`)
       service: whoami
 
   middlewares:
+    whoami-cookie-headers:
+      headers:
+        customResponseHeaders:
+          Cache-Control: 'max-age=60, private="Set-Cookie"'
+          Set-Cookie: "sid=e2e-secret"
+    whoami-cookie-public-headers:
+      headers:
+        customResponseHeaders:
+          Cache-Control: "public, max-age=60"
+          Set-Cookie: "sid=e2e-secret"
     whoami-vary-headers:
       headers:
         customResponseHeaders:

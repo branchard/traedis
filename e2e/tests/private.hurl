@@ -55,3 +55,31 @@ GET {{base_url}}/placeholder-cache/600x600?auth={{run}}
 HTTP 200
 [Asserts]
 header "Cache-Status" contains "traedis; hit; ttl="
+
+# Set-Cookie: a cookie is never shared. The response is stored without it when the backend asks for that with
+# `private="Set-Cookie"` (§5.2.2.7): only the client that caused the miss gets the cookie
+GET {{base_url}}/whoami-cookie?run={{run}}
+HTTP 200
+[Asserts]
+header "Cache-Status" contains "traedis; fwd=uri-miss; fwd-status=200"
+header "Set-Cookie" == "sid=e2e-secret"
+
+GET {{base_url}}/whoami-cookie?run={{run}}
+HTTP 200
+[Asserts]
+header "Cache-Status" contains "traedis; hit; ttl="
+header "Set-Cookie" not exists
+header "Cache-Control" contains "private="
+
+# Otherwise a response with Set-Cookie is not stored, even `public`
+GET {{base_url}}/whoami-cookie-public?run={{run}}
+HTTP 200
+[Asserts]
+header "Cache-Status" contains "traedis; fwd=uri-miss; fwd-status=200"
+header "Set-Cookie" == "sid=e2e-secret"
+
+GET {{base_url}}/whoami-cookie-public?run={{run}}
+HTTP 200
+[Asserts]
+header "Cache-Status" contains "traedis; fwd=uri-miss; fwd-status=200"
+header "Set-Cookie" == "sid=e2e-secret"

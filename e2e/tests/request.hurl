@@ -42,19 +42,19 @@ HTTP 200
 [Asserts]
 header "Cache-Status" contains "traedis; fwd=request; fwd-status=200"
 
-# max-age=0 (§5.2.1.1): the stored response is too old for this client
+# max-age=0 (§5.2.1.1): the stored response is fresh, but too old for this client (RFC 9211 §2.2: fwd=request)
 GET {{base_url}}/whoami-cache?run={{run}}
 Cache-Control: max-age=0
 HTTP 200
 [Asserts]
-header "Cache-Status" contains "traedis; fwd=stale; fwd-status=200"
+header "Cache-Status" contains "traedis; fwd=request; fwd-status=200"
 
 # min-fresh (§5.2.1.3) beyond defaultTtl (5m): not fresh for long enough
 GET {{base_url}}/whoami-cache?run={{run}}
 Cache-Control: min-fresh=600
 HTTP 200
 [Asserts]
-header "Cache-Status" contains "traedis; fwd=stale; fwd-status=200"
+header "Cache-Status" contains "traedis; fwd=request; fwd-status=200"
 
 # Without directives, the stored response is still served
 GET {{base_url}}/whoami-cache?run={{run}}

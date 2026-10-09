@@ -25,8 +25,22 @@ func TestParseCacheControl(t *testing.T) {
 	}{
 		{name: "directive names are case-insensitive", values: []string{"No-Store, MAX-AGE=60"}, check: func(cc cacheControl) bool { return cc.noStore && cc.maxAge == 60 }},
 		{name: "directives across several lines", values: []string{"public", "s-maxage=10"}, check: func(cc cacheControl) bool { return cc.public && cc.sMaxAge == 10 }},
-		{name: "§5.2.2.4 qualified no-cache treated as unqualified", values: []string{`no-cache="Set-Cookie, X-Foo", max-age=5`}, check: func(cc cacheControl) bool { return cc.noCache && cc.maxAge == 5 && !cc.invalid }},
-		{name: "§5.2.2.7 qualified private treated as unqualified", values: []string{`private="Set-Cookie"`}, check: func(cc cacheControl) bool { return cc.private }},
+		{name: "§5.2.2.4 qualified no-cache lists fields that are not stored", values: []string{`no-cache="Set-Cookie, X-Foo", max-age=5`}, check: func(cc cacheControl) bool {
+			return !cc.noCache && sameStrings(cc.unstored, []string{"Set-Cookie", "X-Foo"}) && cc.maxAge == 5 && !cc.invalid
+		}},
+		{name: "§5.2.2.7 qualified private lists fields that are not stored", values: []string{`private="Set-Cookie"`}, check: func(cc cacheControl) bool {
+			return !cc.private && sameStrings(cc.unstored, []string{"Set-Cookie"})
+		}},
+		{name: "§5.2.2.7 field names are case-insensitive", values: []string{`private="set-cookie", no-cache="X-USER"`}, check: func(cc cacheControl) bool {
+			return !cc.private && !cc.noCache && sameStrings(cc.unstored, []string{"Set-Cookie", "X-User"})
+		}},
+		{name: "§5.2.2.7 token form of the argument", values: []string{"private=Set-Cookie, max-age=5"}, check: func(cc cacheControl) bool {
+			return !cc.private && sameStrings(cc.unstored, []string{"Set-Cookie"}) && cc.maxAge == 5
+		}},
+		{name: "§5.2.2.7 unqualified and qualified private", values: []string{`private, private="Set-Cookie"`}, check: func(cc cacheControl) bool { return cc.private }},
+		{name: "§5.2.2.7 empty argument is the unqualified form", values: []string{`private=""`}, check: func(cc cacheControl) bool { return cc.private && len(cc.unstored) == 0 }},
+		{name: "§5.2.2.4 argument that is not a list of field names is the unqualified form", values: []string{`no-cache="Set Cookie"`}, check: func(cc cacheControl) bool { return cc.noCache && len(cc.unstored) == 0 }},
+		{name: "§5.2.2.4 empty field name is the unqualified form", values: []string{`no-cache="Set-Cookie,"`}, check: func(cc cacheControl) bool { return cc.noCache && len(cc.unstored) == 0 }},
 		{name: "quoted delta-seconds accepted", values: []string{`max-age="30"`}, check: func(cc cacheControl) bool { return cc.maxAge == 30 }},
 		{name: "§4.2.1 duplicate max-age is invalid", values: []string{"max-age=10", "max-age=20"}, check: func(cc cacheControl) bool { return cc.invalid && cc.maxAge == 10 }},
 		{name: "§4.2.1 malformed max-age is invalid", values: []string{"max-age=-1"}, check: func(cc cacheControl) bool { return cc.invalid }},
@@ -124,7 +138,6 @@ func TestStoreTTL(t *testing.T) {
 		{name: "§5.2.1.5 request no-store", reqHdr: http.Header{"Cache-Control": {"no-store"}}, status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}}},
 		{name: "§5.2.2.5 response no-store", status: 200, respHdr: http.Header{"Cache-Control": {"no-store, max-age=60"}}},
 		{name: "§5.2.2.7 private", status: 200, respHdr: http.Header{"Cache-Control": {"private, max-age=60"}}},
-		{name: "§5.2.2.7 qualified private", status: 200, respHdr: http.Header{"Cache-Control": {`private="X-User", max-age=60`}}},
 		{name: "§5.2.2.4 no-cache not stored without revalidation", status: 200, respHdr: http.Header{"Cache-Control": {"no-cache, max-age=60"}}},
 		{name: "statusCodes narrows: 404 not listed", status: 404, respHdr: http.Header{"Cache-Control": {"max-age=60"}}},
 		{name: "statusCodes narrows: 404 listed", status: 404, respHdr: http.Header{"Cache-Control": {"max-age=60"}}, mutate: func(s *settings) { s.statusCodes = []int{200, 404} }, want: time.Minute + time.Hour},
@@ -140,9 +153,14 @@ func TestStoreTTL(t *testing.T) {
 		{name: "no defaultTtl for Authorization even if public", reqHdr: http.Header{"Authorization": {"Bearer x"}}, status: 200, respHdr: http.Header{"Cache-Control": {"public"}}},
 		{name: "no defaultTtl for requests with Cookie", reqHdr: http.Header{"Cookie": {"sid=1"}}, status: 200, respHdr: http.Header{}},
 		{name: "explicit freshness for requests with Cookie", reqHdr: http.Header{"Cookie": {"sid=1"}}, status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}}, want: time.Minute + time.Hour},
-		{name: "Set-Cookie without public", status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Set-Cookie": {"sid=1"}}},
-		{name: "Set-Cookie with public", status: 200, respHdr: http.Header{"Cache-Control": {"public, max-age=60"}, "Set-Cookie": {"sid=1"}}, want: time.Minute + time.Hour},
-		{name: "no defaultTtl for Set-Cookie even if public", status: 200, respHdr: http.Header{"Cache-Control": {"public"}, "Set-Cookie": {"sid=1"}}},
+		{name: "Set-Cookie", status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Set-Cookie": {"sid=1"}}},
+		{name: "Set-Cookie, even with public", status: 200, respHdr: http.Header{"Cache-Control": {"public, max-age=60"}, "Set-Cookie": {"sid=1"}}},
+		{name: `§5.2.2.7 Set-Cookie with private="Set-Cookie"`, status: 200, respHdr: http.Header{"Cache-Control": {`max-age=60, private="Set-Cookie"`}, "Set-Cookie": {"sid=1"}}, want: time.Minute + time.Hour},
+		{name: `§5.2.2.4 Set-Cookie with no-cache="Set-Cookie"`, status: 200, respHdr: http.Header{"Cache-Control": {`max-age=60, no-cache="Set-Cookie"`}, "Set-Cookie": {"sid=1"}}, want: time.Minute + time.Hour},
+		{name: "§5.2.2.7 Set-Cookie with a qualified private naming another field", status: 200, respHdr: http.Header{"Cache-Control": {`max-age=60, private="X-User"`}, "Set-Cookie": {"sid=1"}}},
+		{name: "§5.2.2.7 qualified private is not private", status: 200, respHdr: http.Header{"Cache-Control": {`max-age=60, private="X-User"`}, "X-User": {"bob"}}, want: time.Minute + time.Hour},
+		{name: "§5.2.2.4 qualified no-cache is not no-cache", status: 200, respHdr: http.Header{"Cache-Control": {`max-age=60, no-cache="X-User"`}}, want: time.Minute + time.Hour},
+		{name: `no defaultTtl for Set-Cookie, even with private="Set-Cookie"`, status: 200, respHdr: http.Header{"Cache-Control": {`private="Set-Cookie"`}, "Set-Cookie": {"sid=1"}}},
 		{name: "§4.1 Vary", status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Vary": {"Accept-Language"}}, want: time.Minute + time.Hour},
 		{name: "§4.1 Vary: *", status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Vary": {"*"}}},
 		{name: "maxVariants 0: Vary not stored", status: 200, respHdr: http.Header{"Cache-Control": {"max-age=60"}, "Vary": {"Accept-Language"}}, mutate: func(s *settings) { s.maxVariants = 0 }},
@@ -191,6 +209,7 @@ func TestLookupAllowed(t *testing.T) {
 		{name: "§5.4 Pragma no-cache without Cache-Control", header: http.Header{"Pragma": {"no-cache"}}, want: false},
 		{name: "§5.4 Pragma ignored when Cache-Control is present", header: http.Header{"Pragma": {"no-cache"}, "Cache-Control": {"max-age=10"}}, want: true},
 		{name: "§5.2.1.5 request no-store may still be served", header: http.Header{"Cache-Control": {"no-store"}}, want: true},
+		{name: "§5.2.1.4 request no-cache has no qualified form", header: http.Header{"Cache-Control": {`no-cache="Set-Cookie"`}}, want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -358,19 +377,27 @@ func TestHeaderToStore(t *testing.T) {
 		"Keep-Alive":        {"timeout=5"},
 		"Transfer-Encoding": {"chunked"},
 		"Content-Length":    {"12"},
+		"Cache-Control":     {`max-age=60, private="Set-Cookie", no-cache="x-user"`},
 		"Set-Cookie":        {"sid=1"},
+		"X-User":            {"bob"},
 		"Age":               {"3"},
 	}
 	got := headerToStore(h)
-	for _, name := range []string{"Connection", "X-Hop", "Keep-Alive", "Transfer-Encoding", "Content-Length", "Set-Cookie"} {
+	for _, name := range []string{"Connection", "X-Hop", "Keep-Alive", "Transfer-Encoding", "Content-Length", "Set-Cookie", "X-User"} {
 		if got.Get(name) != "" {
 			t.Errorf("%s must not be stored", name)
 		}
 	}
-	if got.Get("Content-Type") != "text/plain" || got.Get("Age") != "3" {
+	if got.Get("Content-Type") != "text/plain" || got.Get("Age") != "3" || got.Get("Cache-Control") == "" {
 		t.Errorf("end-to-end fields must be stored: %v", got)
 	}
-	if h.Get("Set-Cookie") == "" {
+	if h.Get("Set-Cookie") == "" || h.Get("X-User") == "" {
 		t.Error("the original header must not be modified")
+	}
+
+	// §3.1: every field is stored unless the response says otherwise.
+	got = headerToStore(http.Header{"Cache-Control": {"max-age=60"}, "Set-Cookie": {"sid=1"}, "X-User": {"bob"}})
+	if got.Get("Set-Cookie") != "sid=1" || got.Get("X-User") != "bob" {
+		t.Errorf("§3.1 fields that are not excluded must be kept: %v", got)
 	}
 }

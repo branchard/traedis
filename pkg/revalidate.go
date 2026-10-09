@@ -15,11 +15,11 @@ const (
 	revalidationTimeout = 30 * time.Second
 )
 
-// revalidate refreshes the entry of key served to r, the one of field, in the
-// background (RFC 5861 §3), unless an entry of key is already being refreshed
-// or maxRevalidations are running: the next request for a stale entry tries
-// again.
-func (c *cache) revalidate(r *http.Request, key, field string) {
+// revalidate refreshes e, the entry of key served to r, the one of field, in
+// the background (RFC 5861 §3), unless an entry of key is already being
+// refreshed or maxRevalidations are running: the next request for a stale
+// entry tries again.
+func (c *cache) revalidate(r *http.Request, key, field string, e *entry) {
 	c.revalMu.Lock()
 	busy := c.revalidating[key] || len(c.revalidating) >= maxRevalidations
 	if !busy {
@@ -42,24 +42,34 @@ func (c *cache) revalidate(r *http.Request, key, field string) {
 	for _, name := range clientOnly {
 		req.Header.Del(name)
 	}
-	go c.refresh(req, key, field)
+	go c.refresh(req, key, field, e)
 }
 
-// refresh runs a background revalidation: without conditional requests yet
-// (§4.3), a plain GET whose response replaces the entry. A response that is
-// not stored but supersedes the entry deletes it; a backend error leaves it
-// in place, to be served stale for as long as it is allowed.
-func (c *cache) refresh(req *http.Request, key, field string) {
+// refresh runs a background revalidation: a GET with the validators of the
+// entry, if it has some (§4.3.1). A 304 refreshes the entry, any other response
+// replaces it. A response that is not stored but supersedes the entry deletes
+// it; a backend error leaves it in place, to be served stale for as long as it
+// is allowed.
+func (c *cache) refresh(req *http.Request, key, field string, e *entry) {
 	defer c.revalidated(key)
 	ctx, cancel := context.WithTimeout(req.Context(), revalidationTimeout)
 	defer cancel()
 	req = req.WithContext(ctx)
 
-	m := &missHook{c: c, req: req, store: true, revalidation: true, requestTime: time.Now()}
+	m := &missHook{c: c, req: req, store: true, revalidation: true, requestTime: time.Now(), stored: e}
+	out, validating := backendRequest(req, e)
+	m.validating = validating
 	rec := newRecorder(&nullWriter{header: http.Header{}}, m, c.cfg.maxBodyBytes)
-	c.next.ServeHTTP(rec, req)
+	c.next.ServeHTTP(rec, out)
 	if !rec.wroteHeader {
 		rec.WriteHeader(http.StatusOK)
+	}
+	if m.validated != nil {
+		// A 304 that does not update the entry leaves it as it is (§4.3.4).
+		if m.updated {
+			c.freshen(ctx, req, key, field, m.validated)
+		}
+		return
 	}
 	if !c.save(ctx, rec, m, key) && m.superseded {
 		_ = c.store.del(ctx, key, field)

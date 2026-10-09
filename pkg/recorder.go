@@ -107,11 +107,16 @@ func (r *recorder) Flush() {
 	if r.withheld {
 		return
 	}
-	if f, ok := r.rw.(http.Flusher); ok {
+	flush(r.rw)
+}
+
+// flush sends what was written to w to the client now.
+func flush(w http.ResponseWriter) {
+	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 		return
 	}
-	_ = http.NewResponseController(r.rw).Flush()
+	_ = http.NewResponseController(w).Flush()
 }
 
 // Hijack implements http.Hijacker (WebSockets). A hijacked response is never stored.

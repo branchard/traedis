@@ -7,6 +7,15 @@ http:
         - imaging-cache # before the prefix is stripped: the cache key is the public URL
         - imaging-prefix
       service: imaging
+    # Validation: the backend sends an `ETag` and answers `304` to `If-None-Match`. Here its responses are only
+    # fresh for 2 seconds: after that, the cache asks it whether the stored image is still current
+    imaging-validate:
+      rule: PathPrefix(`/imaging-validate`)
+      middlewares:
+        - imaging-cache
+        - imaging-validate-headers # after the cache: for the cache, this header comes from the backend
+        - imaging-prefix
+      service: imaging
     imaging:
       rule: PathPrefix(`/imaging`)
       middlewares:
@@ -19,7 +28,12 @@ http:
       stripPrefix:
         prefixes:
           - /imaging-cache
-          - /imaging
+          - /imaging-validate
+          - /imaging # last: the others start with it
+    imaging-validate-headers:
+      headers:
+        customResponseHeaders:
+          Cache-Control: "max-age=2"
     imaging-cache:
       plugin:
         traedis:

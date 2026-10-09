@@ -284,6 +284,19 @@ func newVariant(req *http.Request, h http.Header) variant {
 	return v
 }
 
+// variantOf returns the variant of e, a stored response read from field that
+// is stored again for req: what it was selected by does not change.
+func variantOf(req *http.Request, e *entry, field string) variant {
+	names, _ := varyNames(e.header)
+	v := variant{names: names, field: field, selected: e.vary}
+	if slices.Contains(names, acceptEncoding) {
+		coding, _ := responseCoding(e.header)
+		v.coding = coding
+		v.accepted = acceptedCodings(req.Header)
+	}
+	return v
+}
+
 // listed returns the codings of the marker once the variant is stored: those
 // of the previous marker and its own. A coding that the request accepts and
 // that pick would choose before the one the backend answered with is dropped:

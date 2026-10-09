@@ -66,6 +66,7 @@ services:
     environment:
       IMGPROXY_LOG_LEVEL: debug
       IMGPROXY_DEVELOPMENT_ERRORS_MODE: "true"
+      IMGPROXY_USE_ETAG: "true" # answers 304 to If-None-Match → http://localhost:8080/imaging-validate/… (fresh for 2s)
     healthcheck:
       test: [ "CMD", "imgproxy", "health" ]
       interval: 2s

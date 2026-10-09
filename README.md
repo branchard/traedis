@@ -19,7 +19,7 @@
 
 > [!NOTE]
 > Traedis is at an early stage. `GET`/`HEAD` caching with RFC 9111 freshness works end to end.
-> Not implemented yet: revalidation with `ETag` / `Last-Modified`, `max-stale`, and invalidation.
+> Not implemented yet: `max-stale` and invalidation.
 
 ## Requirements
 
