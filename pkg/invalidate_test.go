@@ -264,6 +264,7 @@ func TestInvalidatorPreservesHijacker(t *testing.T) {
 			t.Errorf("Hijack() = %v", err)
 			return
 		}
+		//goland:noinspection GoUnhandledErrorResult
 		defer conn.Close()
 		_, _ = buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nhijacked")
 		_ = buf.Flush()
@@ -275,6 +276,7 @@ func TestInvalidatorPreservesHijacker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	//goland:noinspection GoUnhandledErrorResult
 	defer conn.Close()
 	_, _ = io.WriteString(conn, "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n")
 	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
@@ -338,6 +340,7 @@ func TestUnsafeResponseStreams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	//goland:noinspection GoUnhandledErrorResult
 	defer resp.Body.Close()
 	line := make(chan string, 1)
 	go func() {

@@ -354,7 +354,7 @@ func (c *redisClient) logError(err error) {
 	if now.Sub(c.lastLog) < logInterval {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "traedis: redis error, bypassing the cache (%d errors since last report): %v\n", c.logCount, err)
+	_, _ = fmt.Fprintf(os.Stderr, "traedis: redis error, bypassing the cache (%d errors since last report): %v\n", c.logCount, err)
 	c.lastLog = now
 	c.logCount = 0
 }

@@ -93,6 +93,9 @@ func serve(h http.Handler, req *http.Request, buf *bytes.Buffer) *httptest.Respo
 // expect fails the benchmark when it did not measure the outcome it is named after.
 func expect(b *testing.B, rec *httptest.ResponseRecorder, want string) {
 	b.Helper()
+	if rec == nil {
+		b.Fatalf("no response, want Cache-Status %q", want)
+	}
 	if got := rec.Header().Get("Cache-Status"); !strings.Contains(got, want) {
 		b.Fatalf("Cache-Status = %q, want %q", got, want)
 	}

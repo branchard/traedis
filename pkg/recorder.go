@@ -59,13 +59,12 @@ func (r *recorder) WriteHeader(code int) {
 	}
 	r.wroteHeader = true
 	r.status = code
-	switch r.hook.beforeHeader(code, r.rw.Header()) {
-	case withhold:
+	d := r.hook.beforeHeader(code, r.rw.Header())
+	if d == withhold {
 		r.withheld = true
 		return
-	case keepCopy:
-		r.capture = true
 	}
+	r.capture = d == keepCopy
 	if cl := r.rw.Header().Get("Content-Length"); r.capture && cl != "" {
 		if n, err := strconv.ParseInt(cl, 10, 64); err != nil || n > r.max {
 			r.capture = false

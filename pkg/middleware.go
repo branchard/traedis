@@ -230,7 +230,7 @@ func (c *cache) forward(w http.ResponseWriter, r *http.Request, key, field strin
 	}
 	ctx := context.WithoutCancel(r.Context())
 
-	if m.staleIfError {
+	if stored != nil && m.staleIfError {
 		// Nothing of the backend's error was sent: the stored response replaces it.
 		resetHeader(w.Header(), before)
 		status.fwdStatus = rec.status

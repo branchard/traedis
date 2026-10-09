@@ -205,6 +205,7 @@ func TestRecorderPreservesHijacker(t *testing.T) {
 			t.Errorf("Hijack() = %v", err)
 			return
 		}
+		//goland:noinspection GoUnhandledErrorResult
 		defer conn.Close()
 		_, _ = buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nhijacked")
 		_ = buf.Flush()
@@ -215,6 +216,7 @@ func TestRecorderPreservesHijacker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	//goland:noinspection GoUnhandledErrorResult
 	defer conn.Close()
 	_, _ = io.WriteString(conn, "GET / HTTP/1.1\r\nHost: x\r\n\r\n")
 	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
