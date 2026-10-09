@@ -83,6 +83,7 @@ All keys are optional.
 | `defaultStaleWhileRevalidate` | `0s`                   | `stale-while-revalidate` window for responses that don't send the directive. `0` disables it. See [Stale responses](#stale-responses).                     |
 | `defaultStaleIfError`         | `0s`                   | `stale-if-error` window for responses that don't send the directive. `0` disables it.                                                                      |
 | `maxBodyBytes`                | `5242880` (5 MiB)      | Larger responses are streamed to the client and not cached.                                                                                                |
+| `maxVariants`                 | `16`                   | Stored variants per URL, for responses with `Vary`. `0`: responses with `Vary` are not cached. See [Variants](#variants-vary).                             |
 | `exposeKey`                   | `false`                | Add the cache key to the `Cache-Status` header (`key="…"`).                                                                                                |
 
 Durations use the [Go syntax](https://pkg.go.dev/time#ParseDuration) (`50ms`, `5m`, `1h`).
