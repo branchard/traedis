@@ -47,8 +47,13 @@ func TestParseCacheControl(t *testing.T) {
 		{name: "§1.2.2 delta-seconds overflow is capped", values: []string{"max-age=99999999999999999999"}, check: func(cc cacheControl) bool { return cc.maxAge == maxDeltaSeconds }},
 		{name: "unknown directives are ignored", values: []string{"immutable, stale-while-revalidate=5, max-age=1"}, check: func(cc cacheControl) bool { return cc.maxAge == 1 && !cc.invalid }},
 		{name: "absent values are -1", values: nil, check: func(cc cacheControl) bool {
-			return cc.maxAge == -1 && cc.sMaxAge == -1 && cc.minFresh == -1 && cc.staleWhileRevalidate == -1 && cc.staleIfError == -1
+			return cc.maxAge == -1 && cc.sMaxAge == -1 && cc.minFresh == -1 && cc.maxStale == -1 && cc.staleWhileRevalidate == -1 && cc.staleIfError == -1
 		}},
+		{name: "§5.2.1.2 max-stale with a value", values: []string{"max-stale=30"}, check: func(cc cacheControl) bool { return cc.maxStale == 30 && !cc.invalid }},
+		{name: "§5.2.1.2 max-stale without value is any staleness", values: []string{"max-age=5, Max-Stale"}, check: func(cc cacheControl) bool { return cc.maxStale == maxDeltaSeconds && cc.maxAge == 5 }},
+		{name: "§5.2.1.2 malformed max-stale is ignored", values: []string{"max-stale=soon"}, check: func(cc cacheControl) bool { return cc.maxStale == -1 && !cc.invalid }},
+		{name: "§5.2.1.2 max-stale with an empty value is ignored", values: []string{"max-stale="}, check: func(cc cacheControl) bool { return cc.maxStale == -1 }},
+		{name: "§5.2.1.2 first max-stale wins", values: []string{"max-stale=5, max-stale"}, check: func(cc cacheControl) bool { return cc.maxStale == 5 }},
 		{name: "RFC 5861 stale-while-revalidate and stale-if-error", values: []string{"max-age=600, stale-while-revalidate=30, Stale-If-Error=1200"}, check: func(cc cacheControl) bool {
 			return cc.staleWhileRevalidate == 30 && cc.staleIfError == 1200 && !cc.invalid
 		}},
@@ -309,6 +314,49 @@ func TestServableWhileRevalidating(t *testing.T) {
 			got := servableWhileRevalidating(parseCacheControl([]string{tt.reqCC}), parseCacheControl([]string{tt.cc}), tt.staleness, testSettings())
 			if got != tt.want {
 				t.Errorf("servableWhileRevalidating() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestServableOnRequest(t *testing.T) {
+	tests := []struct {
+		name      string
+		reqCC     string
+		respCC    string
+		age       time.Duration // of a response fresh for a minute
+		staleTTL  time.Duration
+		want      bool
+		wantFresh bool
+	}{
+		{name: "§5.2.1.2 max-stale", reqCC: "max-stale", age: 50 * time.Minute, want: true},
+		{name: "§5.2.1.2 max-stale=N within N", reqCC: "max-stale=30", age: 89 * time.Second, want: true},
+		{name: "§5.2.1.2 max-stale=N at N", reqCC: "max-stale=30", age: 90 * time.Second},
+		{name: "§5.2.1.2 no max-stale", reqCC: "max-age=3600", age: 70 * time.Second},
+		{name: "§5.2.1.2 fresh response is not its business", reqCC: "max-stale", age: 10 * time.Second},
+		{name: "capped at staleTtl", reqCC: "max-stale", age: 80 * time.Second, staleTTL: 10 * time.Second},
+		{name: "staleTtl 0", reqCC: "max-stale", age: 61 * time.Second, staleTTL: -1},
+		{name: "§4.2.4 no-cache", reqCC: "max-stale", respCC: "no-cache", age: 70 * time.Second},
+		{name: "§4.2.4 must-revalidate", reqCC: "max-stale", respCC: "must-revalidate", age: 70 * time.Second},
+		{name: "§4.2.4 proxy-revalidate", reqCC: "max-stale", respCC: "proxy-revalidate", age: 70 * time.Second},
+		{name: "§5.2.2.10 s-maxage", reqCC: "max-stale", respCC: "s-maxage=60", age: 70 * time.Second},
+		{name: "§5.2.1.1 max-age satisfied", reqCC: "max-stale, max-age=70", age: 70 * time.Second, want: true},
+		{name: "§5.2.1.1 max-age exceeded", reqCC: "max-stale, max-age=69", age: 70 * time.Second},
+		{name: "§5.2.1.3 min-fresh", reqCC: "max-stale, min-fresh=0", age: 70 * time.Second},
+		{name: "the stale windows of the response are not needed", reqCC: "max-stale", respCC: "stale-while-revalidate=0, stale-if-error=0", age: 70 * time.Second, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			staleTTL := tt.staleTTL
+			if staleTTL == 0 {
+				staleTTL = time.Hour
+			} else if staleTTL < 0 {
+				staleTTL = 0
+			}
+			reqCC := parseCacheControl([]string{tt.reqCC})
+			cc := parseCacheControl([]string{tt.respCC})
+			if got := servableOnRequest(reqCC, cc, tt.age, time.Minute, staleTTL); got != tt.want {
+				t.Errorf("servableOnRequest() = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -23,4 +23,6 @@ type store interface {
 	del(ctx context.Context, key, field string) error
 	// count returns the number of fields of key.
 	count(ctx context.Context, key string) (int, error)
+	// invalidate removes key, with all its fields.
+	invalidate(ctx context.Context, key string) error
 }

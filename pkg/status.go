@@ -15,7 +15,7 @@ type cacheStatus struct {
 	fwd       string        // uri-miss, vary-miss, stale, request, method or bypass
 	fwdStatus int           // status received from the backend
 	key       string        // only when exposeKey is set
-	detail    string        // token: redis, stale-while-revalidate or stale-if-error
+	detail    string        // token: redis, stale-while-revalidate, stale-if-error, max-stale or invalidated
 }
 
 func (s cacheStatus) String() string {

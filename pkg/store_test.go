@@ -15,6 +15,8 @@ type memStore struct {
 	variantErr error
 	sets       int
 	dels       int
+	// invalidations counts the keys removed as a whole.
+	invalidations int
 }
 
 type memValue struct {
@@ -93,6 +95,17 @@ func (m *memStore) del(_ context.Context, key, field string) error {
 	}
 	delete(m.data[key], field)
 	m.dels++
+	return nil
+}
+
+func (m *memStore) invalidate(_ context.Context, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return m.err
+	}
+	delete(m.data, key)
+	m.invalidations++
 	return nil
 }
 

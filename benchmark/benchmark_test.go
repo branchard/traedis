@@ -230,11 +230,11 @@ func BenchmarkOversize(b *testing.B) {
 	expect(b, rec, "fwd=uri-miss") // still a miss: never stored
 }
 
-// BenchmarkPassThrough is a request the cache never handles (unsafe method): the
-// writer is not wrapped and Redis is not contacted.
+// BenchmarkPassThrough is a request the cache has nothing to do with (OPTIONS):
+// the writer is not wrapped and Redis is not contacted.
 func BenchmarkPassThrough(b *testing.B) {
 	h := newHandler(b, &backend{body: make([]byte, 1<<10), cacheControl: "no-store"}, defaultMaxBody)
-	req := newRequest(http.MethodPost, "/pass-through")
+	req := newRequest(http.MethodOptions, "/pass-through")
 	buf := &bytes.Buffer{}
 	var rec *httptest.ResponseRecorder
 
@@ -244,4 +244,20 @@ func BenchmarkPassThrough(b *testing.B) {
 	}
 	b.StopTimer()
 	expect(b, rec, "fwd=method")
+}
+
+// BenchmarkInvalidate is an unsafe request (POST) that succeeds: key, DEL, and
+// a response flushed as it is written.
+func BenchmarkInvalidate(b *testing.B) {
+	h := newHandler(b, &backend{body: make([]byte, 1<<10), cacheControl: "no-store"}, defaultMaxBody)
+	req := newRequest(http.MethodPost, "/invalidate")
+	buf := &bytes.Buffer{}
+	var rec *httptest.ResponseRecorder
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rec = serve(h, req, buf)
+	}
+	b.StopTimer()
+	expect(b, rec, "detail=invalidated")
 }

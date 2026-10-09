@@ -46,6 +46,10 @@ func newCache(next http.Handler, name string, cfg settings, s store) *cache {
 }
 
 func (c *cache) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !safeMethod(r.Method) {
+		c.invalidate(w, r)
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		c.passThrough(w, r, "method")
 		return
@@ -93,6 +97,12 @@ func (c *cache) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			c.serve(w, r, stored, age, lifetime, status)
 			return
 		}
+		if servableOnRequest(reqCC, cc, age, lifetime, c.cfg.staleTTL) {
+			status.hit = true
+			status.detail = "max-stale"
+			c.serve(w, r, stored, age, lifetime, status)
+			return
+		}
 		// RFC 9211 §2.2: the response is stale, or fresh but not what the
 		// request asks for (max-age, min-fresh).
 		status.fwd = "stale"
@@ -133,9 +143,10 @@ func (c *cache) find(ctx context.Context, key string, h http.Header) (*entry, st
 	return e, field, miss, nil
 }
 
-// passThrough proxies a request the cache never handles, without wrapping the
-// writer (Yaegi would hide http.Flusher from the backend). Cache-Status is set
-// before the backend's own values.
+// passThrough proxies a request the cache has nothing to do with (OPTIONS,
+// TRACE, upgrades, event streams), without wrapping the writer (Yaegi would
+// hide http.Flusher from the backend). Cache-Status is set before the
+// backend's own values.
 func (c *cache) passThrough(w http.ResponseWriter, r *http.Request, fwd string) {
 	w.Header().Add("Cache-Status", cacheStatus{fwd: fwd}.String())
 	c.next.ServeHTTP(w, r)

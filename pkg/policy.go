@@ -26,6 +26,9 @@ type cacheControl struct {
 	maxAge          int64
 	sMaxAge         int64
 	minFresh        int64
+	// maxStale is the staleness a request accepts (§5.2.1.2): maxDeltaSeconds
+	// when the directive has no value, which is any staleness.
+	maxStale int64
 	// RFC 5861 windows. They don't affect freshness: a malformed value is
 	// ignored and the first one wins.
 	staleWhileRevalidate int64
@@ -36,7 +39,7 @@ type cacheControl struct {
 }
 
 func parseCacheControl(values []string) cacheControl {
-	cc := cacheControl{maxAge: -1, sMaxAge: -1, minFresh: -1, staleWhileRevalidate: -1, staleIfError: -1}
+	cc := cacheControl{maxAge: -1, sMaxAge: -1, minFresh: -1, maxStale: -1, staleWhileRevalidate: -1, staleIfError: -1}
 	for _, line := range values {
 		for _, d := range splitList(line) {
 			name, value := d, ""
@@ -69,6 +72,13 @@ func parseCacheControl(values []string) cacheControl {
 				cc.sMaxAge = cc.seconds(cc.sMaxAge, value)
 			case "min-fresh":
 				cc.minFresh = cc.seconds(cc.minFresh, value)
+			case "max-stale":
+				if name == d && cc.maxStale < 0 {
+					// Without value: a stale response of any age.
+					cc.maxStale = maxDeltaSeconds
+				} else {
+					cc.maxStale = staleSeconds(cc.maxStale, value)
+				}
 			case "stale-while-revalidate":
 				cc.staleWhileRevalidate = staleSeconds(cc.staleWhileRevalidate, value)
 			case "stale-if-error":
@@ -360,6 +370,21 @@ func staleAllowed(cc cacheControl, directive int64, fallback, staleness, staleTT
 func servableWhileRevalidating(reqCC, cc cacheControl, staleness time.Duration, cfg settings) bool {
 	return staleness >= 0 && reqCC.maxAge < 0 && reqCC.minFresh < 0 &&
 		staleAllowed(cc, cc.staleWhileRevalidate, cfg.defaultStaleWhileRevalidate, staleness, cfg.staleTTL)
+}
+
+// servableOnRequest reports whether a stale response may be served because the
+// request accepts it with max-stale (§5.2.1.2), within staleTtl. Its max-age
+// still bounds the age of the response (§5.2.1.1), and min-fresh asks for the
+// opposite. As for any stale response, no directive of the response may forbid
+// it (§4.2.4).
+func servableOnRequest(reqCC, cc cacheControl, age, lifetime, staleTTL time.Duration) bool {
+	if reqCC.maxStale < 0 || reqCC.minFresh >= 0 || age < lifetime {
+		return false
+	}
+	if reqCC.maxAge >= 0 && age > seconds(reqCC.maxAge) {
+		return false
+	}
+	return staleAllowed(cc, reqCC.maxStale, 0, age-lifetime, staleTTL)
 }
 
 // servableOnError reports whether a stored response may replace a backend

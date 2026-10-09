@@ -35,6 +35,7 @@ var defaultReplies = map[string]string{
 	"HGET":   "$5\r\nhello\r\n",
 	"HSETEX": ":1\r\n",
 	"HDEL":   ":1\r\n",
+	"DEL":    ":1\r\n",
 	"HLEN":   ":3\r\n",
 	"AUTH":   "+OK\r\n",
 	"SELECT": "+OK\r\n",
@@ -235,6 +236,22 @@ func TestRedisCount(t *testing.T) {
 	f = newFakeRedis(t, map[string]string{"HLEN": "+OK\r\n"})
 	if _, err := testClient(f).count(context.Background(), "traedis:k"); !errors.Is(err, errProtocol) {
 		t.Errorf("count() error = %v, want errProtocol", err)
+	}
+}
+
+func TestRedisInvalidate(t *testing.T) {
+	f := newFakeRedis(t, nil)
+	if err := testClient(f).invalidate(context.Background(), "traedis:k"); err != nil {
+		t.Fatalf("invalidate() = %v", err)
+	}
+	cmds := f.received()
+	if len(cmds) != 1 || strings.Join(cmds[0], " ") != "DEL traedis:k" {
+		t.Errorf("commands = %q", cmds)
+	}
+
+	f = newFakeRedis(t, map[string]string{"DEL": "+OK\r\n"})
+	if err := testClient(f).invalidate(context.Background(), "traedis:k"); !errors.Is(err, errProtocol) {
+		t.Errorf("invalidate() error = %v, want errProtocol", err)
 	}
 }
 
@@ -551,5 +568,27 @@ func TestRedisIntegrationVariants(t *testing.T) {
 	}
 	if n, err := c.count(ctx, key); err != nil || n != 0 {
 		t.Errorf("count() = %d, %v after cleanup", n, err)
+	}
+}
+
+func TestRedisIntegrationInvalidate(t *testing.T) {
+	c := integrationClient(t)
+	ctx := context.Background()
+	key := testKey(t)
+
+	if err := c.invalidate(ctx, key); err != nil {
+		t.Fatalf("invalidate() of a missing key = %v", err)
+	}
+	if err := c.set(ctx, key, "", []byte("entry"), 5*time.Second); err != nil {
+		t.Fatalf("set() = %v", err)
+	}
+	if err := c.setVariant(ctx, key, "f1", []byte("v1"), []byte("marker"), 5*time.Second, false); err != nil {
+		t.Fatalf("setVariant() = %v", err)
+	}
+	if err := c.invalidate(ctx, key); err != nil {
+		t.Fatalf("invalidate() = %v", err)
+	}
+	if n, err := c.count(ctx, key); err != nil || n != 0 {
+		t.Errorf("count() = %d, %v: every field must be gone", n, err)
 	}
 }

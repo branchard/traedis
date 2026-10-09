@@ -7,7 +7,7 @@
 //   - its connection pool relies on select statements, which Yaegi runs
 //     incorrectly from several goroutines (see redisClient);
 //   - it would have to be vendored: tens of thousands of lines, for HGET, HSETEX,
-//     HDEL and HLEN.
+//     HDEL, HLEN and DEL.
 
 package traedis
 
@@ -120,6 +120,17 @@ func (c *redisClient) hsetex(ctx context.Context, key string, ttl time.Duration,
 		[]byte("FIELDS"), []byte(strconv.Itoa(len(fields)/2)))
 	args = append(args, fields...)
 	r, err := c.do(ctx, args...)
+	if err != nil {
+		return err
+	}
+	if r.kind != ':' {
+		return errProtocol
+	}
+	return nil
+}
+
+func (c *redisClient) invalidate(ctx context.Context, key string) error {
+	r, err := c.do(ctx, []byte("DEL"), []byte(key))
 	if err != nil {
 		return err
 	}

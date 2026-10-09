@@ -17,10 +17,6 @@
 - **Observable**: every response carries a `Cache-Status` header (`hit`, `fwd=uri-miss`, `fwd=bypass`…).
 - **Stream-friendly**: large bodies, WebSockets and server-sent events pass through untouched.
 
-> [!NOTE]
-> Traedis is at an early stage. `GET`/`HEAD` caching with RFC 9111 freshness works end to end.
-> Not implemented yet: `max-stale` and invalidation.
-
 ## Requirements
 
 - Traefik v3

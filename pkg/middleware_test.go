@@ -214,6 +214,91 @@ func TestRequestDirectives(t *testing.T) {
 	}
 }
 
+func TestMaxStale(t *testing.T) {
+	tests := []struct {
+		name         string
+		cacheControl string // of the stored response
+		age          time.Duration
+		method       string
+		reqCC        string
+		mutate       func(*Config)
+		wantStatus   string // prefix of Cache-Status
+		wantCalls    int
+	}{
+		{name: "§5.2.1.2 max-stale: any staleness", cacheControl: "max-age=60", age: 30 * time.Minute, reqCC: "max-stale", wantStatus: "traedis; hit; ttl=-1740; detail=max-stale"},
+		{name: "§5.2.1.2 max-stale=N: within N seconds", cacheControl: "max-age=60", age: 70 * time.Second, reqCC: "max-stale=30", wantStatus: "traedis; hit; ttl=-1"},
+		{name: "§5.2.1.2 max-stale=N: staler than N seconds", cacheControl: "max-age=60", age: 100 * time.Second, reqCC: "max-stale=30", wantStatus: "traedis; fwd=stale; fwd-status=200", wantCalls: 1},
+		{name: "§5.2.1.2 max-stale=0", cacheControl: "max-age=60", age: 70 * time.Second, reqCC: "max-stale=0", wantStatus: "traedis; fwd=stale; fwd-status=200", wantCalls: 1},
+		{name: "§5.2.1.2 HEAD", cacheControl: "max-age=60", age: 70 * time.Second, method: http.MethodHead, reqCC: "max-stale", wantStatus: "traedis; hit; ttl=-1"},
+		{name: "§5.2.1.2 a fresh response is a plain hit", cacheControl: "max-age=60", age: 10 * time.Second, reqCC: "max-stale", wantStatus: "traedis; hit; ttl=4"},
+		{name: "capped at staleTtl", cacheControl: "max-age=60", age: 90 * time.Second, reqCC: "max-stale", mutate: func(c *Config) { c.StaleTTL = "10s" }, wantStatus: "traedis; fwd=stale; fwd-status=200", wantCalls: 1},
+		{name: "§4.2.4 must-revalidate forbids it", cacheControl: "max-age=60, must-revalidate", age: 70 * time.Second, reqCC: "max-stale", wantStatus: "traedis; fwd=stale; fwd-status=200", wantCalls: 1},
+		{name: "§4.2.4 proxy-revalidate forbids it", cacheControl: "max-age=60, proxy-revalidate", age: 70 * time.Second, reqCC: "max-stale", wantStatus: "traedis; fwd=stale; fwd-status=200", wantCalls: 1},
+		{name: "§4.2.4 s-maxage forbids it", cacheControl: "s-maxage=60", age: 70 * time.Second, reqCC: "max-stale", wantStatus: "traedis; fwd=stale; fwd-status=200", wantCalls: 1},
+		{name: "§5.2.1.1 with max-age: age within both", cacheControl: "max-age=60", age: 70 * time.Second, reqCC: "max-age=100, max-stale=30", wantStatus: "traedis; hit; ttl=-1"},
+		{name: "§5.2.1.1 with max-age: too old", cacheControl: "max-age=60", age: 70 * time.Second, reqCC: "max-age=65, max-stale=30", wantStatus: "traedis; fwd=stale; fwd-status=200", wantCalls: 1},
+		{name: "§5.2.1.3 min-fresh asks for the opposite", cacheControl: "max-age=60", age: 70 * time.Second, reqCC: "min-fresh=0, max-stale", wantStatus: "traedis; fwd=stale; fwd-status=200", wantCalls: 1},
+		{name: "§5.2.1.7 with only-if-cached", cacheControl: "max-age=60", age: 70 * time.Second, reqCC: "only-if-cached, max-stale", wantStatus: "traedis; hit; ttl=-1"},
+		{name: "§5.2.1.4 no-cache wins", cacheControl: "max-age=60", age: 70 * time.Second, reqCC: "no-cache, max-stale", wantStatus: "traedis; fwd=request; fwd-status=200", wantCalls: 1},
+		{name: "malformed max-stale is ignored", cacheControl: "max-age=60", age: 70 * time.Second, reqCC: "max-stale=soon", wantStatus: "traedis; fwd=stale; fwd-status=200", wantCalls: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := cacheableBackend()
+			c, st := newTestCache(t, b, tt.mutate)
+			storeAged(t, st, tt.cacheControl, tt.age)
+			method := tt.method
+			if method == "" {
+				method = http.MethodGet
+			}
+			rec := doRequest(c, method, staleURL, http.Header{"Cache-Control": {tt.reqCC}})
+
+			got := lastCacheStatus(rec)
+			if !strings.HasPrefix(got, tt.wantStatus) {
+				t.Errorf("Cache-Status = %q, want %q…", got, tt.wantStatus)
+			}
+			if b.calls != tt.wantCalls || len(c.revalidating) != 0 {
+				t.Errorf("backend calls = %d, want %d; revalidations = %d, want none", b.calls, tt.wantCalls, len(c.revalidating))
+			}
+			if tt.wantCalls > 0 {
+				return
+			}
+			wantBody := "old"
+			if method == http.MethodHead {
+				wantBody = ""
+			}
+			if rec.Code != 200 || rec.Body.String() != wantBody {
+				t.Errorf("the stored response must be served: got %d %q", rec.Code, rec.Body.String())
+			}
+			if age := rec.Header().Get("Age"); age != strconv.Itoa(int(tt.age/time.Second)) && age != strconv.Itoa(int(tt.age/time.Second)+1) {
+				t.Errorf("§4.2.3 Age = %q, want %d", age, tt.age/time.Second)
+			}
+			if st.sets != 1 {
+				t.Error("the entry must be left as it was")
+			}
+			stale := strings.Contains(got, "ttl=-")
+			if stale != strings.HasSuffix(got, "; detail=max-stale") {
+				t.Errorf("Cache-Status = %q: detail=max-stale is for a stale response", got)
+			}
+		})
+	}
+}
+
+// stale-while-revalidate serves the same response and refreshes it.
+func TestMaxStaleWithStaleWhileRevalidate(t *testing.T) {
+	b := cacheableBackend()
+	c, st := newTestCache(t, b, nil)
+	storeAged(t, st, "max-age=60, stale-while-revalidate=30", 70*time.Second)
+	rec := doRequest(c, http.MethodGet, staleURL, http.Header{"Cache-Control": {"max-stale"}})
+	if rec.Body.String() != "old" || !isStaleWhileRevalidate(lastCacheStatus(rec)) {
+		t.Errorf("got %q %q", rec.Body.String(), lastCacheStatus(rec))
+	}
+	waitRevalidations(t, c)
+	if b.calls != 1 {
+		t.Errorf("backend calls = %d, want the background revalidation", b.calls)
+	}
+}
+
 func TestOnlyIfCachedMissIs504(t *testing.T) {
 	b := cacheableBackend()
 	c, _ := newTestCache(t, b, nil)
@@ -514,7 +599,8 @@ func TestPassThroughDoesNotWrapWriter(t *testing.T) {
 		header     http.Header
 		wantStatus string
 	}{
-		{name: "§4 unsafe method", method: http.MethodPost, wantStatus: "traedis; fwd=method"},
+		{name: "RFC 9110 §9.2.1 OPTIONS", method: http.MethodOptions, wantStatus: "traedis; fwd=method"},
+		{name: "RFC 9110 §9.2.1 TRACE", method: http.MethodTrace, wantStatus: "traedis; fwd=method"},
 		{name: "WebSocket upgrade", method: http.MethodGet, header: http.Header{"Upgrade": {"websocket"}, "Connection": {"Upgrade"}}, wantStatus: "traedis; fwd=bypass"},
 		{name: "server-sent events", method: http.MethodGet, header: http.Header{"Accept": {"text/event-stream"}}, wantStatus: "traedis; fwd=bypass"},
 	}
