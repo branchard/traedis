@@ -444,7 +444,7 @@ func TestClientConditionsWithoutStoredResponse(t *testing.T) {
 			if tt.want == 304 && (o.validations != 1 || rec.Body.Len() != 0 || rec.Header().Get("ETag") != `"v1"`) {
 				t.Errorf("the 304 must be the one of the backend: %v (304 sent %d)", rec.Header(), o.validations)
 			}
-			if _, stored := st.lookup(redisKey(cacheURI(req)), ""); stored != tt.wantStored {
+			if _, stored := st.lookup(redisKey(cacheURI(req, false)), ""); stored != tt.wantStored {
 				t.Errorf("stored = %v, want %v", stored, tt.wantStored)
 			}
 		})

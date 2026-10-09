@@ -59,7 +59,7 @@ func (c *cache) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := redisKey(cacheURI(r))
+	key := redisKey(cacheURI(r, c.cfg.sortQuery))
 	status := cacheStatus{}
 	if c.cfg.exposeKey {
 		status.key = key

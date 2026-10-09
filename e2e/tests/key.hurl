@@ -1,4 +1,4 @@
-# Cache key: scheme + lowercased host + path + query sorted by parameter name.
+# Cache key: scheme + lowercased host + path + query.
 
 GET {{base_url}}/placeholder-cache/600x600?b=2&a=1&run={{run}}
 [Options]
@@ -7,13 +7,29 @@ HTTP 200
 [Asserts]
 header "Cache-Status" contains "traedis; fwd=uri-miss"
 
-# Query parameter order is ignored
-GET {{base_url}}/placeholder-cache/600x600?a=1&b=2&run={{run}}
+GET {{base_url}}/placeholder-cache/600x600?b=2&a=1&run={{run}}
 HTTP 200
 [Asserts]
 header "Cache-Status" contains "traedis; hit"
 # exposeKey is false: the Redis key is not disclosed
 header "Cache-Status" not contains "key="
+
+# Another query parameter order is another resource (RFC 9111 §4)
+GET {{base_url}}/placeholder-cache/600x600?a=1&b=2&run={{run}}
+HTTP 200
+[Asserts]
+header "Cache-Status" contains "traedis; fwd=uri-miss"
+
+# Unless sortQuery is true
+GET {{base_url}}/whoami-sort-query?b=2&a=1&run={{run}}
+HTTP 200
+[Asserts]
+header "Cache-Status" contains "traedis; fwd=uri-miss"
+
+GET {{base_url}}/whoami-sort-query?run={{run}}&a=1&b=2
+HTTP 200
+[Asserts]
+header "Cache-Status" contains "traedis; hit"
 
 # Another query value is another resource
 GET {{base_url}}/placeholder-cache/600x600?a=1&b=3&run={{run}}

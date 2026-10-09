@@ -25,7 +25,7 @@ func TestCreateConfigDefaults(t *testing.T) {
 	if s.defaultStaleWhileRevalidate != 0 || s.defaultStaleIfError != 0 {
 		t.Errorf("§4.2.4 no stale response unless the backend or the configuration allows it: %v, %v", s.defaultStaleWhileRevalidate, s.defaultStaleIfError)
 	}
-	if s.maxBodyBytes != 5242880 || s.maxVariants != 16 || s.exposeKey {
+	if s.maxBodyBytes != 5242880 || s.maxVariants != 16 || s.sortQuery || s.exposeKey {
 		t.Errorf("settings = %+v", s)
 	}
 }

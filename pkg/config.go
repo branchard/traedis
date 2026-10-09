@@ -23,6 +23,7 @@ type Config struct {
 	DefaultStaleIfError         string      `json:"defaultStaleIfError,omitempty"`
 	MaxBodyBytes                int64       `json:"maxBodyBytes,omitempty"`
 	MaxVariants                 int         `json:"maxVariants,omitempty"`
+	SortQuery                   bool        `json:"sortQuery,omitempty"`
 	ExposeKey                   bool        `json:"exposeKey,omitempty"`
 }
 
@@ -46,6 +47,7 @@ func CreateConfig() *Config {
 		DefaultStaleIfError:         "0s",
 		MaxBodyBytes:                5 << 20,
 		MaxVariants:                 16,
+		SortQuery:                   false,
 		ExposeKey:                   false,
 	}
 }
@@ -63,7 +65,10 @@ type settings struct {
 	// marker. Past it, new variants are not stored: stored ones are never
 	// evicted. 0: responses with Vary are not stored.
 	maxVariants int
-	exposeKey   bool
+	// sortQuery makes the order of the query parameters irrelevant to the
+	// cache key (see cacheURI).
+	sortQuery bool
+	exposeKey bool
 }
 
 // redisOptions describes how to reach Redis. It holds credentials: never log it.
@@ -123,6 +128,7 @@ func parseConfig(cfg *Config) (settings, error) {
 	}
 	s.maxVariants = cfg.MaxVariants
 
+	s.sortQuery = cfg.SortQuery
 	s.exposeKey = cfg.ExposeKey
 
 	return s, nil

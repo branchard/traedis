@@ -15,4 +15,5 @@ testData:
   defaultStaleIfError: 0s
   maxBodyBytes: 5242880
   maxVariants: 16
+  sortQuery: false
   exposeKey: false

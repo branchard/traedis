@@ -93,7 +93,7 @@ func TestMissThenHit(t *testing.T) {
 	if got := lastCacheStatus(first); got != "traedis; fwd=uri-miss; fwd-status=200" {
 		t.Errorf("miss Cache-Status = %q", got)
 	}
-	v, ok := st.lookup(redisKey("http://example.com/600x400?a=1&b=2"), "")
+	v, ok := st.lookup(redisKey(testURL), "")
 	if !ok {
 		t.Fatal("response not stored")
 	}
@@ -101,8 +101,8 @@ func TestMissThenHit(t *testing.T) {
 		t.Errorf("stored ttl = %v, want %v", v.ttl, want)
 	}
 
-	// Same resource with another parameter order.
-	second := doRequest(c, http.MethodGet, "http://EXAMPLE.com/600x400?a=1&b=2", nil)
+	// Same resource: the host is case-insensitive.
+	second := doRequest(c, http.MethodGet, "http://EXAMPLE.com/600x400?b=2&a=1", nil)
 	if b.calls != 1 {
 		t.Errorf("backend calls = %d, want 1", b.calls)
 	}
@@ -124,6 +124,35 @@ func storeEntry(t *testing.T, st *memStore, uri string, e *entry) {
 	t.Helper()
 	if err := st.set(context.Background(), redisKey(uri), "", encodeEntry(e), time.Hour); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// §4: URIs that differ by the order of their query parameters are not the same,
+// unless sortQuery says so.
+func TestSortQuery(t *testing.T) {
+	const reordered = "http://example.com/600x400?a=1&b=2"
+	tests := []struct {
+		name      string
+		sortQuery bool
+		wantHit   bool
+	}{
+		{name: "§4 another parameter order is another URI"},
+		{name: "sortQuery: the parameter order is ignored", sortQuery: true, wantHit: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := cacheableBackend()
+			c, _ := newTestCache(t, b, func(cfg *Config) { cfg.SortQuery = tt.sortQuery })
+			doRequest(c, http.MethodGet, testURL, nil)
+			if rec := doRequest(c, http.MethodGet, reordered, nil); isHit(lastCacheStatus(rec)) != tt.wantHit {
+				t.Errorf("Cache-Status = %q, want hit = %v", lastCacheStatus(rec), tt.wantHit)
+			}
+			// §4.4: an unsafe request invalidates what its own URI names.
+			doRequest(c, http.MethodPost, reordered, nil)
+			if rec := doRequest(c, http.MethodGet, testURL, nil); isHit(lastCacheStatus(rec)) == tt.wantHit {
+				t.Errorf("after a POST: Cache-Status = %q, want invalidated = %v", lastCacheStatus(rec), tt.wantHit)
+			}
+		})
 	}
 }
 
@@ -593,7 +622,7 @@ func TestDefaultTTLWithoutExplicitFreshness(t *testing.T) {
 	if rec.Header().Get("Cache-Control") != "" {
 		t.Error("Cache-Control must never be rewritten")
 	}
-	if v, _ := st.lookup(redisKey("http://example.com/600x400?a=1&b=2"), ""); !closeTo(v.ttl, 5*time.Minute+time.Hour) {
+	if v, _ := st.lookup(redisKey(testURL), ""); !closeTo(v.ttl, 5*time.Minute+time.Hour) {
 		t.Errorf("ttl = %v", v.ttl)
 	}
 }
@@ -616,7 +645,7 @@ func TestExposeKey(t *testing.T) {
 	b := cacheableBackend()
 	c, _ := newTestCache(t, b, func(cfg *Config) { cfg.ExposeKey = true })
 	rec := doRequest(c, http.MethodGet, testURL, nil)
-	want := `key="` + redisKey("http://example.com/600x400?a=1&b=2") + `"`
+	want := `key="` + redisKey(testURL) + `"`
 	if !strings.Contains(lastCacheStatus(rec), want) {
 		t.Errorf("Cache-Status = %q, want it to contain %s", lastCacheStatus(rec), want)
 	}

@@ -45,6 +45,12 @@ http:
         - whoami-cache
         - whoami-cookie-public-headers
       service: whoami
+    # Query sorting: here `?a=1&b=2` and `?b=2&a=1` share the same cached response
+    whoami-sort-query:
+      rule: PathPrefix(`/whoami-sort-query`)
+      middlewares:
+        - whoami-sort-query
+      service: whoami
     whoami:
       rule: PathPrefix(`/whoami`)
       service: whoami
@@ -92,6 +98,12 @@ http:
           redis:
             dsn: "redis://cache:6379/2"
           maxVariants: 3 # per URL; 16 by default
+    whoami-sort-query:
+      plugin:
+        traedis:
+          redis:
+            dsn: "redis://cache:6379/2"
+          sortQuery: true # off by default: for RFC 9111, these are two URLs
     whoami-stale-default:
       plugin:
         traedis:

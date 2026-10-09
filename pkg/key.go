@@ -9,9 +9,12 @@ import (
 const keyPrefix = "traedis:"
 
 // cacheURI returns the normalized URI identifying a resource: scheme, lowercased
-// host (port kept), escaped path and raw query sorted by parameter name. The
-// method is not part of it. This format is stable: changing it invalidates the cache.
-func cacheURI(r *http.Request) string {
+// host (port kept), escaped path and raw query. With sortQuery, the query is
+// sorted by parameter name: URIs that only differ by the order of their
+// parameters, which are not the same for RFC 9111 (§4), then share their stored
+// responses. The method is not part of it. This format is stable: changing it
+// invalidates the cache.
+func cacheURI(r *http.Request, sortQuery bool) string {
 	// Schema
 	scheme := "http"
 	if r.TLS != nil {
@@ -32,7 +35,10 @@ func cacheURI(r *http.Request) string {
 	}
 
 	// Query
-	query := sortedQuery(r.URL.RawQuery)
+	query := r.URL.RawQuery
+	if sortQuery {
+		query = sortedQuery(query)
+	}
 
 	// URI
 	uri := scheme + "://" + host + path
@@ -43,8 +49,9 @@ func cacheURI(r *http.Request) string {
 	return uri
 }
 
-// sortedQuery sorts raw query parameters by name, without decoding them. The sort
-// is stable so repeated names keep their relative order.
+// sortedQuery sorts raw query parameters by name, without decoding them, and
+// drops the empty ones. The sort is stable so repeated names keep their
+// relative order.
 func sortedQuery(raw string) string {
 	if raw == "" {
 		return ""

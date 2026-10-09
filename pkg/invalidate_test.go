@@ -63,11 +63,11 @@ func TestInvalidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			b := &backend{status: tt.status, header: http.Header{"Cache-Status": {"origin; fwd=miss"}, "Location": {"/items/2"}}, body: "done"}
 			c, st := newTestCache(t, b, nil)
-			storeFresh(t, st, "http://example.com/items/1?a=1&b=2")
+			storeFresh(t, st, invalidatedURL)
 			storeFresh(t, st, "http://example.com/items/1")
 			storeFresh(t, st, "http://example.com/items/2")
 			// A variant of the target URI, in the same key.
-			if err := st.set(context.Background(), redisKey("http://example.com/items/1?a=1&b=2"), "variant", []byte("v"), time.Hour); err != nil {
+			if err := st.set(context.Background(), redisKey(invalidatedURL), "variant", []byte("v"), time.Hour); err != nil {
 				t.Fatal(err)
 			}
 
@@ -78,8 +78,8 @@ func TestInvalidation(t *testing.T) {
 			if tt.status != 204 && tt.status != 304 && rec.Body.String() != "done" {
 				t.Errorf("body = %q", rec.Body.String())
 			}
-			_, kept := st.lookup(redisKey("http://example.com/items/1?a=1&b=2"), "")
-			_, variantKept := st.lookup(redisKey("http://example.com/items/1?a=1&b=2"), "variant")
+			_, kept := st.lookup(redisKey(invalidatedURL), "")
+			_, variantKept := st.lookup(redisKey(invalidatedURL), "variant")
 			if kept == tt.wantInvalidated || variantKept == tt.wantInvalidated {
 				t.Errorf("§4.4 stored responses of the target URI kept = %v, %v; want invalidated = %v", kept, variantKept, tt.wantInvalidated)
 			}
@@ -117,12 +117,12 @@ func TestInvalidationThenMiss(t *testing.T) {
 	}
 
 	rec := doRequest(c, http.MethodPost, testURL, nil)
-	want := `traedis; fwd=method; fwd-status=200; key="` + redisKey("http://example.com/600x400?a=1&b=2") + `"; detail=invalidated`
+	want := `traedis; fwd=method; fwd-status=200; key="` + redisKey(testURL) + `"; detail=invalidated`
 	if lastCacheStatus(rec) != want {
 		t.Errorf("Cache-Status = %q, want %q", lastCacheStatus(rec), want)
 	}
 	rec = doRequest(c, http.MethodGet, testURL, nil)
-	if b.calls != 3 || lastCacheStatus(rec) != `traedis; fwd=uri-miss; fwd-status=200; key="`+redisKey("http://example.com/600x400?a=1&b=2")+`"` {
+	if b.calls != 3 || lastCacheStatus(rec) != `traedis; fwd=uri-miss; fwd-status=200; key="`+redisKey(testURL)+`"` {
 		t.Errorf("§4.4 the next GET must be a miss: %q (backend calls %d)", lastCacheStatus(rec), b.calls)
 	}
 }
