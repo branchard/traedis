@@ -1,7 +1,7 @@
 > [!WARNING]
 > **This project is a work in progress.** Use it at your own risk.
 
-<p style="text-align: center">
+<p align="center">
   <img src="assets/icon.svg" alt="Traedis Logo" height="360">
 </p>
 
