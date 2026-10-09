@@ -40,6 +40,7 @@ func TestNotModified(t *testing.T) {
 		{name: "RFC 9110 §13.1.3 a later date", req: http.Header{"If-Modified-Since": {after}}, resp: http.Header{"Last-Modified": {lastModified}}, want: true},
 		{name: "RFC 9110 §13.1.3 modified since", req: http.Header{"If-Modified-Since": {before}}, resp: http.Header{"Last-Modified": {lastModified}}},
 		{name: "RFC 9110 §13.1.3 invalid date", req: http.Header{"If-Modified-Since": {"yesterday"}}, resp: http.Header{"Last-Modified": {lastModified}}},
+		{name: "RFC 9110 §13.1.3 several dates", req: http.Header{"If-Modified-Since": {after, after}}, resp: http.Header{"Last-Modified": {lastModified}}},
 		{name: "§4.3.2 Date when there is no Last-Modified", req: http.Header{"If-Modified-Since": {lastModified}}, resp: http.Header{"Date": {lastModified}}, want: true},
 		{name: "§4.3.2 generated after the date", req: http.Header{"If-Modified-Since": {before}}, resp: http.Header{"Date": {lastModified}}},
 		{name: "§4.3.2 received time when there is no Date", req: http.Header{"If-Modified-Since": {lastModified}}, resp: http.Header{}, want: true},

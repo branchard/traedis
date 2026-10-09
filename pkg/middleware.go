@@ -173,6 +173,11 @@ func (c *cache) serve(w http.ResponseWriter, r *http.Request, e *entry, age, lif
 	for name, values := range e.header {
 		h[name] = append([]string(nil), values...)
 	}
+	if e.header.Get("Date") == "" {
+		// RFC 9110 §6.6.1: a response received without Date gets the time it
+		// was received.
+		h.Set("Date", e.responseTime.UTC().Format(http.TimeFormat))
+	}
 	h.Set("Age", strconv.FormatInt(int64(age/time.Second), 10))
 	status.ttl = lifetime - age
 	h.Add("Cache-Status", status.String())
@@ -200,8 +205,8 @@ func bodyAllowed(status int) bool {
 // of a backend error when stale-if-error allows it (RFC 5861 §4).
 func (c *cache) forward(w http.ResponseWriter, r *http.Request, key, field string, reqCC cacheControl, status cacheStatus, mayStore bool, stored *entry) {
 	if reqCC.onlyIfCached {
-		// §5.2.1.7: no stored response may be used.
-		w.Header().Add("Cache-Status", status.String())
+		// §5.2.1.7: no stored response may be used. This response is our own
+		// and the request is not forwarded: no Cache-Status (RFC 9211 §2).
 		w.WriteHeader(http.StatusGatewayTimeout)
 		return
 	}

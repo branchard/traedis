@@ -21,6 +21,7 @@ type cacheControl struct {
 	unstored        []string
 	public          bool
 	mustRevalidate  bool
+	mustUnderstand  bool
 	proxyRevalidate bool
 	onlyIfCached    bool
 	maxAge          int64
@@ -62,6 +63,8 @@ func parseCacheControl(values []string) cacheControl {
 				cc.public = true
 			case "must-revalidate":
 				cc.mustRevalidate = true
+			case "must-understand":
+				cc.mustUnderstand = true
 			case "proxy-revalidate":
 				cc.proxyRevalidate = true
 			case "only-if-cached":
@@ -225,6 +228,15 @@ func freshnessLifetime(e *entry, cc cacheControl, defaultTTL time.Duration) time
 	return 0
 }
 
+// understood lists the final status codes the cache knows the caching
+// requirements of: those of RFC 9110 §15. A response with must-understand and
+// any other status is not stored (§3, §5.2.2.3).
+func understood(status int) bool {
+	return (status >= 200 && status <= 206) || (status >= 300 && status <= 308 && status != 306) ||
+		(status >= 400 && status <= 417) || status == 421 || status == 422 || status == 426 ||
+		(status >= 500 && status <= 505)
+}
+
 func dateValue(h http.Header, responseTime time.Time) time.Time {
 	if t, err := http.ParseTime(h.Get("Date")); err == nil {
 		return t
@@ -238,8 +250,10 @@ func currentAge(h http.Header, requestTime, responseTime, now time.Time) time.Du
 	if apparentAge < 0 {
 		apparentAge = 0
 	}
+	// §5.1: the first member of a list is used, an invalid value is ignored.
 	var ageValue time.Duration
-	if n, ok := parseDeltaSeconds(strings.TrimSpace(h.Get("Age"))); ok {
+	first, _, _ := strings.Cut(h.Get("Age"), ",")
+	if n, ok := parseDeltaSeconds(strings.TrimSpace(first)); ok {
 		ageValue = seconds(n)
 	}
 	correctedAgeValue := ageValue + responseTime.Sub(requestTime)
@@ -272,6 +286,10 @@ func storeTTL(req *http.Request, status int, h http.Header, cfg settings, reques
 	// A no-cache response is never served without being validated first
 	// (§5.2.2.4): the cache does not keep responses for that only.
 	if cc.noCache {
+		return 0, false
+	}
+	// no-store still wins over must-understand: ignoring it is only a SHOULD.
+	if cc.mustUnderstand && !understood(status) {
 		return 0, false
 	}
 	hasAuth := req.Header.Get("Authorization") != ""
@@ -428,11 +446,11 @@ var clientOnly = []string{
 	"If-Match", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since",
 }
 
-// hopByHop lists header fields never stored nor replayed (RFC 9110 §7.6.1).
-// Content-Length is recomputed when serving.
+// hopByHop lists header fields never stored nor replayed (RFC 9110 §7.6.1),
+// those of a proxy included (§3.1). Content-Length is recomputed when serving.
 var hopByHop = []string{
-	"Connection", "Keep-Alive", "Proxy-Connection", "Proxy-Authenticate", "Proxy-Authorization",
-	"Te", "Trailer", "Transfer-Encoding", "Upgrade", "Content-Length",
+	"Connection", "Keep-Alive", "Proxy-Connection", "Proxy-Authenticate", "Proxy-Authentication-Info",
+	"Proxy-Authorization", "Te", "Trailer", "Transfer-Encoding", "Upgrade", "Content-Length",
 }
 
 // headerToStore copies the response header without hop-by-hop fields and

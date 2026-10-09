@@ -14,7 +14,8 @@ GET {{base_url}}/whoami-cache?run={{run}}
 Cache-Control: only-if-cached
 HTTP 504
 [Asserts]
-header "Cache-Status" contains "traedis; fwd=uri-miss"
+# RFC 9211 §2: a response of the cache's own, to a request that was not forwarded
+header "Cache-Status" not exists
 
 GET {{base_url}}/whoami-cache?run={{run}}
 HTTP 200

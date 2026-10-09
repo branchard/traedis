@@ -4,6 +4,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -322,5 +324,71 @@ func TestRevalidationPanicIsRecovered(t *testing.T) {
 	waitRevalidations(t, c)
 	if _, kept := st.lookup(redisKey(staleURL), ""); !kept || st.sets != 1 {
 		t.Error("the entry must be left as it was")
+	}
+}
+
+// §3.3: a response that the backend cuts short is not stored, whether it had a
+// Content-Length or not. Traefik's proxy (httputil.ReverseProxy) aborts such a
+// response with a panic, but only for a request that has a server: the one of
+// a background revalidation must keep it.
+func TestIncompleteResponseIsNotStored(t *testing.T) {
+	tests := []struct {
+		name     string
+		response string
+	}{
+		{name: "§3.3 shorter than its Content-Length", response: "HTTP/1.1 200 OK\r\nCache-Control: max-age=60\r\nContent-Length: 10\r\n\r\nhello"},
+		{name: "§3.3 chunked without its last chunk", response: "HTTP/1.1 200 OK\r\nCache-Control: max-age=60\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				conn, buf, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				_, _ = buf.WriteString(tt.response)
+				_ = buf.Flush()
+				_ = conn.Close()
+			}))
+			defer origin.Close()
+			target, err := url.Parse(origin.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			proxy := httputil.NewSingleHostReverseProxy(target)
+			c, st := newTestCache(t, proxy, nil)
+			front := httptest.NewServer(c)
+			defer front.Close()
+			uri := front.URL + "/a"
+			key := redisKey(uri)
+
+			if resp, err := http.Get(uri); err == nil {
+				_, _ = io.Copy(io.Discard, resp.Body)
+				_ = resp.Body.Close()
+			}
+			if _, stored := st.lookup(key, ""); stored {
+				t.Fatal("miss: the incomplete response was stored")
+			}
+
+			at := time.Now().Add(-70 * time.Second)
+			storeEntry(t, st, uri, &entry{
+				status: 200, header: http.Header{"Cache-Control": {"max-age=60, stale-while-revalidate=30"}}, body: []byte("old"),
+				requestTime: at, responseTime: at,
+			})
+			resp, err := http.Get(uri)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if string(body) != "old" || !isStaleWhileRevalidate(resp.Header.Get("Cache-Status")) {
+				t.Fatalf("got %q %q", body, resp.Header.Get("Cache-Status"))
+			}
+			waitRevalidations(t, c)
+			if v, kept := st.lookup(key, ""); !kept || st.sets != 1 {
+				t.Errorf("background revalidation: the entry must be left as it was (kept %v, %d bytes, %d writes)", kept, len(v.value), st.sets)
+			}
+		})
 	}
 }

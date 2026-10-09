@@ -283,6 +283,10 @@ func TestSelects(t *testing.T) {
 		{name: "identity: the request accepts a coding the backend was not offered", vary: "Accept-Encoding", selected: http.Header{"Accept-Encoding": {"gzip"}}, reqHdr: http.Header{"Accept-Encoding": {"gzip, br"}}},
 		{name: "identity stored for a request without Accept-Encoding", vary: "Accept-Encoding", selected: http.Header{"Accept-Encoding": {""}}, reqHdr: http.Header{"Accept-Encoding": {"gzip"}}},
 		{name: "identity stored without its request codings", vary: "Accept-Encoding", selected: http.Header{}, reqHdr: http.Header{"Accept-Encoding": {"gzip"}}},
+		{name: "RFC 9110 §12.5.3 identity refused", vary: "Accept-Encoding", selected: http.Header{"Accept-Encoding": {"gzip"}}, reqHdr: http.Header{"Accept-Encoding": {"gzip, identity;q=0"}}},
+		{name: "RFC 9110 §12.5.3 identity refused by *;q=0", vary: "Accept-Encoding", selected: http.Header{"Accept-Encoding": {"gzip"}}, reqHdr: http.Header{"Accept-Encoding": {"gzip, *;q=0"}}},
+		{name: "RFC 9110 §12.5.3 identity listed with *;q=0", vary: "Accept-Encoding", selected: http.Header{"Accept-Encoding": {"gzip"}}, reqHdr: http.Header{"Accept-Encoding": {"identity, *;q=0"}}, want: true},
+		{name: "RFC 9110 §12.5.3 identity refused, coding accepted", vary: "Accept-Encoding", encoding: "br", selected: http.Header{"Accept-Encoding": {"br"}}, reqHdr: http.Header{"Accept-Encoding": {"br, identity;q=0"}}, want: true},
 		{name: "coding and another header", vary: "Accept-Encoding, Accept-Language", encoding: "gzip", selected: http.Header{"Accept-Encoding": {"gzip"}, "Accept-Language": {"fr"}}, reqHdr: http.Header{"Accept-Encoding": {"gzip"}, "Accept-Language": {"en"}}},
 	}
 	for _, tt := range tests {
@@ -438,7 +442,7 @@ func TestOnlyIfCachedVaryMissIs504(t *testing.T) {
 	doRequest(c, http.MethodGet, varyURL, http.Header{"Accept-Language": {"fr"}})
 
 	rec := doRequest(c, http.MethodGet, varyURL, http.Header{"Accept-Language": {"en"}, "Cache-Control": {"only-if-cached"}})
-	if rec.Code != http.StatusGatewayTimeout || b.calls != 1 || lastCacheStatus(rec) != "traedis; fwd=vary-miss" {
+	if rec.Code != http.StatusGatewayTimeout || b.calls != 1 || lastCacheStatus(rec) != "" {
 		t.Errorf("§5.2.1.7 got %d %q with %d backend calls", rec.Code, lastCacheStatus(rec), b.calls)
 	}
 }

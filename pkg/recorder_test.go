@@ -121,6 +121,42 @@ func TestRecorderSkipsCaptureForLargeContentLength(t *testing.T) {
 	}
 }
 
+// §3.3: a body shorter than its Content-Length is not a complete response.
+func TestRecorderIncompleteBody(t *testing.T) {
+	tests := []struct {
+		name          string
+		contentLength string
+		body          string
+		want          bool
+	}{
+		{name: "§3.3 as long as its Content-Length", contentLength: "5", body: "hello", want: true},
+		{name: "§3.3 shorter than its Content-Length", contentLength: "10", body: "hello"},
+		{name: "§3.3 no body at all", contentLength: "10"},
+		{name: "no Content-Length", body: "hello", want: true},
+		{name: "empty body", contentLength: "0", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rw := httptest.NewRecorder()
+			rec := newRecorder(rw, &hookStub{capture: true}, 1024)
+			if tt.contentLength != "" {
+				rec.Header().Set("Content-Length", tt.contentLength)
+			}
+			rec.WriteHeader(200)
+			if tt.body != "" {
+				_, _ = rec.Write([]byte(tt.body))
+			}
+			body, ok := rec.body()
+			if ok != tt.want || (ok && string(body) != tt.body) {
+				t.Errorf("body() = %q, %v; want complete = %v", body, ok, tt.want)
+			}
+			if rw.Body.String() != tt.body {
+				t.Errorf("client got %q, want %q", rw.Body.String(), tt.body)
+			}
+		})
+	}
+}
+
 func TestRecorderPassesInformationalResponses(t *testing.T) {
 	rw := &writerStub{header: http.Header{}}
 	hook := &hookStub{capture: true}

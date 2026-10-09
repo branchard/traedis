@@ -306,6 +306,41 @@ func TestOnlyIfCachedMissIs504(t *testing.T) {
 	if rec.Code != http.StatusGatewayTimeout || b.calls != 0 {
 		t.Errorf("§5.2.1.7 got %d with %d backend calls, want 504 and none", rec.Code, b.calls)
 	}
+	// RFC 9211 §2: not for a response the cache made up, without forwarding.
+	if got := rec.Header().Values("Cache-Status"); len(got) != 0 {
+		t.Errorf("Cache-Status = %q, want none", got)
+	}
+}
+
+// RFC 9110 §6.6.1: a response received without Date is sent with the time it
+// was received, not the time it is served from the cache.
+func TestStoredResponseWithoutDateGetsOne(t *testing.T) {
+	b := cacheableBackend()
+	c, st := newTestCache(t, b, nil)
+	received := time.Now().Add(-10 * time.Second)
+	storeEntry(t, st, "http://example.com/a", &entry{
+		status: 200, header: http.Header{"Cache-Control": {"max-age=60"}, "Etag": {`"v1"`}}, body: []byte("cached"),
+		requestTime: received, responseTime: received,
+	})
+	want := received.UTC().Format(http.TimeFormat)
+	rec := doRequest(c, http.MethodGet, "http://example.com/a", nil)
+	if !isHit(lastCacheStatus(rec)) || rec.Header().Get("Date") != want || rec.Header().Get("Age") != "10" {
+		t.Errorf("hit: Date = %q, want %q (Age %q, Cache-Status %q)", rec.Header().Get("Date"), want, rec.Header().Get("Age"), lastCacheStatus(rec))
+	}
+	rec = doRequest(c, http.MethodGet, "http://example.com/a", http.Header{"If-None-Match": {`"v1"`}})
+	if rec.Code != http.StatusNotModified || rec.Header().Get("Date") != want {
+		t.Errorf("304: got %d, Date = %q, want %q", rec.Code, rec.Header().Get("Date"), want)
+	}
+
+	// The Date of the backend is left alone.
+	date := received.Add(-5 * time.Second).UTC().Format(http.TimeFormat)
+	storeEntry(t, st, "http://example.com/b", &entry{
+		status: 200, header: http.Header{"Cache-Control": {"max-age=60"}, "Date": {date}}, body: []byte("cached"),
+		requestTime: received, responseTime: received,
+	})
+	if rec := doRequest(c, http.MethodGet, "http://example.com/b", nil); rec.Header().Get("Date") != date {
+		t.Errorf("Date = %q, want the one of the backend %q", rec.Header().Get("Date"), date)
+	}
 }
 
 func TestStaleEntryIsRefreshed(t *testing.T) {

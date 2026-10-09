@@ -135,9 +135,13 @@ func (r *recorder) Unwrap() http.ResponseWriter {
 }
 
 // body returns the captured body, and false when the response was not fully
-// captured (not wanted, too large, write error or hijacked).
+// captured (not wanted, too large, write error or hijacked) or is incomplete
+// (§3.3): not as long as its Content-Length says.
 func (r *recorder) body() ([]byte, bool) {
 	if !r.capture || r.hijacked {
+		return nil, false
+	}
+	if cl := r.rw.Header().Get("Content-Length"); cl != "" && cl != strconv.Itoa(r.buf.Len()) {
 		return nil, false
 	}
 	return r.buf.Bytes(), true

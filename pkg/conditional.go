@@ -21,12 +21,17 @@ var conditions = []string{"If-None-Match", "If-Modified-Since"}
 // at the given time, is the one the client says it has: the answer to the
 // request header req is then a 304 (RFC 9110 §13.1, RFC 9111 §4.3.2).
 // If-None-Match alone decides when it is there; If-Modified-Since is compared
-// with Last-Modified, or with when the response was generated or received.
+// with Last-Modified, or with when the response was generated or received, and
+// ignored unless it is one valid date (RFC 9110 §13.1.3).
 func notModified(req, resp http.Header, received time.Time) bool {
 	if tags := req.Values("If-None-Match"); len(tags) > 0 {
 		return etagListed(tags, resp.Get("ETag"))
 	}
-	since, err := http.ParseTime(req.Get("If-Modified-Since"))
+	dates := req.Values("If-Modified-Since")
+	if len(dates) != 1 {
+		return false
+	}
+	since, err := http.ParseTime(dates[0])
 	if err != nil {
 		return false
 	}

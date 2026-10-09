@@ -111,16 +111,7 @@ func responseCoding(h http.Header) (string, bool) {
 // the coding is refused. A request without Accept-Encoding is taken as
 // accepting none of them, as backends do.
 func acceptedCodings(h http.Header) []string {
-	listed := map[string]bool{} // whether each coding of the request is accepted
-	for _, line := range h.Values(acceptEncoding) {
-		for _, item := range strings.Split(line, ",") {
-			coding, params, _ := strings.Cut(item, ";")
-			coding = strings.ToLower(strings.TrimSpace(coding))
-			if coding != "" {
-				listed[coding] = !zeroWeight(params)
-			}
-		}
-	}
+	listed := listedCodings(h)
 	var accepted []string
 	for _, coding := range contentCodings {
 		ok, found := listed[coding]
@@ -132,6 +123,33 @@ func acceptedCodings(h http.Header) []string {
 		}
 	}
 	return accepted
+}
+
+// listedCodings returns the codings listed by the Accept-Encoding of a request
+// ("*" is one of them), and whether each one is accepted.
+func listedCodings(h http.Header) map[string]bool {
+	listed := map[string]bool{}
+	for _, line := range h.Values(acceptEncoding) {
+		for _, item := range strings.Split(line, ",") {
+			coding, params, _ := strings.Cut(item, ";")
+			coding = strings.ToLower(strings.TrimSpace(coding))
+			if coding != "" {
+				listed[coding] = !zeroWeight(params)
+			}
+		}
+	}
+	return listed
+}
+
+// identityRefused reports whether a request refuses an uncompressed response
+// (RFC 9110 §12.5.3): "identity;q=0", or "*;q=0" when identity is not listed.
+func identityRefused(h http.Header) bool {
+	listed := listedCodings(h)
+	if ok, found := listed[identity]; found {
+		return !ok
+	}
+	ok, found := listed["*"]
+	return found && !ok
 }
 
 // zeroWeight reports whether the parameters of an Accept-Encoding item hold q=0.
@@ -328,7 +346,7 @@ func selects(e *entry, h http.Header) bool {
 	}
 	for _, name := range names {
 		if name == acceptEncoding {
-			if !suits(e, acceptedCodings(h)) {
+			if !suits(e, h) {
 				return false
 			}
 			continue
@@ -346,18 +364,23 @@ func selects(e *entry, h http.Header) bool {
 }
 
 // suits reports whether a stored response varying by Accept-Encoding may be
-// sent to a request accepting the given codings: its content coding is one of
-// them. An uncompressed response is acceptable to all (RFC 9110 §12.5.3), but
-// only suits the requests accepting no other coding than the one it was stored
-// for did: offered those, the backend did not compress. Any other request is
-// forwarded, the backend may compress for it.
-func suits(e *entry, accepted []string) bool {
+// sent to a request with header h: its content coding is one of those the
+// request accepts. An uncompressed response is acceptable to all but the
+// requests refusing it (RFC 9110 §12.5.3), but only suits the requests
+// accepting no other coding than the one it was stored for did: offered those,
+// the backend did not compress. Any other request is forwarded, the backend
+// may compress for it.
+func suits(e *entry, h http.Header) bool {
 	coding, ok := responseCoding(e.header)
 	if !ok {
 		return false
 	}
+	accepted := acceptedCodings(h)
 	if coding != identity {
 		return slices.Contains(accepted, coding)
+	}
+	if identityRefused(h) {
+		return false
 	}
 	offered := strings.Split(strings.Join(e.vary[acceptEncoding], ","), ",")
 	for _, c := range accepted {

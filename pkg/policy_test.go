@@ -59,6 +59,7 @@ func TestParseCacheControl(t *testing.T) {
 		}},
 		{name: "RFC 5861 malformed window is ignored, freshness is kept", values: []string{"max-age=60, stale-if-error=soon"}, check: func(cc cacheControl) bool { return cc.staleIfError == -1 && cc.maxAge == 60 && !cc.invalid }},
 		{name: "RFC 5861 first window wins", values: []string{"stale-while-revalidate=5, stale-while-revalidate=50"}, check: func(cc cacheControl) bool { return cc.staleWhileRevalidate == 5 && !cc.invalid }},
+		{name: "§5.2.2.3 must-understand", values: []string{"Must-Understand, no-store"}, check: func(cc cacheControl) bool { return cc.mustUnderstand && cc.noStore }},
 		{name: "§5.2.2.8 proxy-revalidate", values: []string{"proxy-revalidate"}, check: func(cc cacheControl) bool { return cc.proxyRevalidate && !cc.mustRevalidate }},
 	}
 	for _, tt := range tests {
@@ -113,6 +114,8 @@ func TestCurrentAge(t *testing.T) {
 		{name: "§4.2.3 apparent age from an old Date", header: http.Header{"Date": {t0.Add(-time.Minute).Format(http.TimeFormat)}}, requestTime: t0, responseTime: t0, now: t0, want: time.Minute},
 		{name: "§4.2.3 Date in the future is clamped", header: http.Header{"Date": {t0.Add(time.Hour).Format(http.TimeFormat)}}, requestTime: t0, responseTime: t0, now: t0, want: 0},
 		{name: "§5.1 invalid Age is ignored", header: http.Header{"Age": {"-5"}}, requestTime: t0, responseTime: t0, now: t0, want: 0},
+		{name: "§5.1 first member of an Age list", header: http.Header{"Age": {"100, 5"}}, requestTime: t0, responseTime: t0, now: t0, want: 100 * time.Second},
+		{name: "§5.1 invalid first member of an Age list", header: http.Header{"Age": {"x, 5"}}, requestTime: t0, responseTime: t0, now: t0, want: 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -144,6 +147,10 @@ func TestStoreTTL(t *testing.T) {
 		{name: "§5.2.2.5 response no-store", status: 200, respHdr: http.Header{"Cache-Control": {"no-store, max-age=60"}}},
 		{name: "§5.2.2.7 private", status: 200, respHdr: http.Header{"Cache-Control": {"private, max-age=60"}}},
 		{name: "§5.2.2.4 no-cache not stored without revalidation", status: 200, respHdr: http.Header{"Cache-Control": {"no-cache, max-age=60"}}},
+		{name: "§5.2.2.3 must-understand with a status the cache knows", status: 200, respHdr: http.Header{"Cache-Control": {"must-understand, max-age=60"}}, want: time.Minute + time.Hour},
+		{name: "§5.2.2.3 must-understand with an unknown status", status: 299, respHdr: http.Header{"Cache-Control": {"must-understand, max-age=60"}}, mutate: func(s *settings) { s.statusCodes = []int{299} }},
+		{name: "§3 unknown status without must-understand", status: 299, respHdr: http.Header{"Cache-Control": {"max-age=60"}}, mutate: func(s *settings) { s.statusCodes = []int{299} }, want: time.Minute + time.Hour},
+		{name: "§5.2.2.3 no-store still wins over must-understand", status: 200, respHdr: http.Header{"Cache-Control": {"must-understand, no-store, max-age=60"}}},
 		{name: "statusCodes narrows: 404 not listed", status: 404, respHdr: http.Header{"Cache-Control": {"max-age=60"}}},
 		{name: "statusCodes narrows: 404 listed", status: 404, respHdr: http.Header{"Cache-Control": {"max-age=60"}}, mutate: func(s *settings) { s.statusCodes = []int{200, 404} }, want: time.Minute + time.Hour},
 		{name: "§4.2.2 defaultTtl only for heuristically cacheable codes", status: 302, respHdr: http.Header{}, mutate: func(s *settings) { s.statusCodes = []int{302} }},
@@ -425,13 +432,16 @@ func TestHeaderToStore(t *testing.T) {
 		"Keep-Alive":        {"timeout=5"},
 		"Transfer-Encoding": {"chunked"},
 		"Content-Length":    {"12"},
-		"Cache-Control":     {`max-age=60, private="Set-Cookie", no-cache="x-user"`},
-		"Set-Cookie":        {"sid=1"},
-		"X-User":            {"bob"},
-		"Age":               {"3"},
+		// §3.1: specific to the proxy a response came through.
+		"Proxy-Authenticate":        {"Basic"},
+		"Proxy-Authentication-Info": {"nextnonce=1"},
+		"Cache-Control":             {`max-age=60, private="Set-Cookie", no-cache="x-user"`},
+		"Set-Cookie":                {"sid=1"},
+		"X-User":                    {"bob"},
+		"Age":                       {"3"},
 	}
 	got := headerToStore(h)
-	for _, name := range []string{"Connection", "X-Hop", "Keep-Alive", "Transfer-Encoding", "Content-Length", "Set-Cookie", "X-User"} {
+	for _, name := range []string{"Connection", "X-Hop", "Keep-Alive", "Transfer-Encoding", "Content-Length", "Proxy-Authenticate", "Proxy-Authentication-Info", "Set-Cookie", "X-User"} {
 		if got.Get(name) != "" {
 			t.Errorf("%s must not be stored", name)
 		}

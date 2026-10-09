@@ -34,8 +34,11 @@ func (c *cache) revalidate(r *http.Request, key, field string, e *entry) {
 	// still ours: it keeps the headers that select the variant. It also keeps
 	// the trace headers but not the request context:
 	// Traefik keeps there the state of a request (access log fields…) that
-	// must not be written to once its response is sent.
-	req := r.Clone(context.Background())
+	// must not be written to once its response is sent. Its server is kept:
+	// without one, Traefik's proxy returns from a response that the backend
+	// cut short as if it were complete (§3.3), instead of panicking.
+	ctx := context.WithValue(context.Background(), http.ServerContextKey, r.Context().Value(http.ServerContextKey))
+	req := r.Clone(ctx)
 	req.Method = http.MethodGet
 	req.Body = http.NoBody
 	req.ContentLength = 0
