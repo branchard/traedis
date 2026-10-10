@@ -17,7 +17,7 @@ start: unwatch ## Start containers with Docker Compose and Docker Compose Watch
 	@echo "Open http://localhost:8080/placeholder-cache/800x600 to see sample image with caching"
 	@echo "Open http://localhost:8080/imaging/unsafe/rs:fill:300:200/plain/http://placeholder:3000/800x600@avif to see sample image through imgproxy without caching"
 	@echo "Open http://localhost:8080/imaging-cache/unsafe/rs:fill:300:200/plain/http://placeholder:3000/800x600@avif to see sample image through imgproxy with caching"
-	@echo "Open http://localhost:5540/ to see what is stored on Redis"
+	@echo "Open http://localhost:5540/ to see Redis Insight"
 
 stop: unwatch ## Stop and delete all containers
 	docker compose down
