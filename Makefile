@@ -1,15 +1,20 @@
 # @see: https://stackoverflow.com/a/70550568
 MAKEFLAGS += --no-print-directory
-.PHONY: help start stop reset unwatch unit e2e bench bench-view assets
+.PHONY: help start stop reset unwatch test unit e2e bench bench-view assets
 
-##@ Global
+# Services the tests and benchmarks need: the whole stack but Redis Insight
+TEST_STACK := ingress cache whoami placeholder imaging
+
+# Stops the containers when the recipe ends, even when it fails or on Ctrl-C (which /bin/sh only traps when told to)
+down_on_exit = trap 'docker compose down' EXIT; trap 'exit 1' INT TERM
+
 help: ## Show this help
 	@# @see: https://www.avonture.be/blog/makefile-help/
 	@awk 'BEGIN { FS = ":.*##"; printf "Usage:\n  make \033[36m<target>\033[0m\n\nTargets:\n" } \
 		/^[a-zA-Z0-9_-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 start: unwatch ## Start containers with Docker Compose and Docker Compose Watch
-	docker compose up -d --force-recreate
+	docker compose up -d --force-recreate --wait --wait-timeout 120
 	nohup docker compose watch </dev/null >/dev/null 2>&1 & echo $$! > /tmp/compose-watch.traedis.pid
 	@echo "Open http://localhost:8080/whoami to see whoami page without caching"
 	@echo "Open http://localhost:8080/whoami-cache to see whoami page with caching"
@@ -28,21 +33,23 @@ reset: unwatch ## Stop, delete all containers and remove volumes
 unwatch: ## Stop Docker Compose Watch
 	@if [ -f /tmp/compose-watch.traedis.pid ]; then kill $$(cat /tmp/compose-watch.traedis.pid) 2>/dev/null || true; rm -f /tmp/compose-watch.traedis.pid; fi
 
+test: unit e2e ## Run all tests: what the CI requires (unit, then end-to-end)
+
 unit: export TRAEDIS_REDIS_DSN = redis://localhost:6379/15
-unit: stop ## Run unit and Redis integration tests (compiled Go, then Yaegi)
-	docker compose up -d --wait --wait-timeout 120 cache
-	@# Always stop the containers, even when a test fails
-	go vet ./... && go test -race ./... && (cd pkg && yaegi test -v .); status=$$?; docker compose down; exit $$status
+unit: stop ## Run gofmt, go vet, then unit and Redis integration tests (compiled Go, then Yaegi)
+	@command -v yaegi >/dev/null \
+		|| { echo "yaegi not found: go install github.com/traefik/yaegi/cmd/yaegi@v0.16.1" >&2; exit 1; }
+	@# Fails when files need formatting, and lists them
+	! gofmt -l . | grep .
+	go vet ./...
+	$(down_on_exit); docker compose up -d --wait --wait-timeout 120 cache \
+		&& go test -race ./... && (cd pkg && yaegi test -v .)
 
 e2e: stop ## Run end-to-end tests (Hurl through Traefik)
-	docker compose up -d --wait --wait-timeout 120
-	@# Always stop the containers, even when a test fails
-	./e2e/run.sh; status=$$?; docker compose down; exit $$status
+	$(down_on_exit); docker compose up -d --wait --wait-timeout 120 $(TEST_STACK) && ./e2e/run.sh
 
 bench: stop ## Run benchmarks (under Yaegi, then k6 through Traefik) into benchmark/results.json
-	docker compose up -d --wait --wait-timeout 120 ingress cache whoami placeholder imaging
-	@# Always stop the containers, even when a benchmark fails
-	./benchmark/run.sh; status=$$?; docker compose down; exit $$status
+	$(down_on_exit); docker compose up -d --wait --wait-timeout 120 $(TEST_STACK) && ./benchmark/run.sh
 
 bench-view: ## Show benchmark/results.json as tables → http://localhost:8082/visualizer.html (Ctrl-C to stop)
 	@echo "http://localhost:8082/visualizer.html"
@@ -57,4 +64,4 @@ assets: ## Optimize icon.svg with SVGO and generate icon.png
 	--export-type=png --export-png-antialias=3 --export-filename="/assets/icon.png" --export-area-drawing --export-height=256
 	@echo "Center PNG…"
 	docker run -u "$$(id -u):$$(id -g)" --rm -v "./assets:/assets" dpokidov/imagemagick /assets/icon.png \
-    -gravity center -background none -extent 256x256 /assets/icon.png
+	-gravity center -background none -extent 256x256 /assets/icon.png

@@ -272,7 +272,8 @@ is the Redis client (RESP and connection pool).
 ```bash
 make start       # start the local stack; Traefik restarts whenever the plugin code changes
 make stop        # stop the stack (`make reset` also removes the volumes)
-make unit        # go vet, go test -race, then the same tests under Yaegi, with a Redis for the integration tests
+make test        # all the tests the CI requires: `make unit`, then `make e2e`
+make unit        # gofmt, go vet, go test -race, then the same tests under Yaegi, with a Redis for the integration tests
 make e2e         # end-to-end tests, through Traefik
 make bench       # benchmarks → benchmark/results.json (`make bench-view` shows them)
 make help        # list all targets
